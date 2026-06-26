@@ -294,7 +294,7 @@
     el.innerHTML =
       '<div class="page-head"><h1>Team selection</h1>' +
       '<p>Pick a formation, then drag registered players onto the pitch. Click any ' +
-      'position to set up to three backups. ' + escapeHtml(matchLabel()) + '.</p>' +
+      'position to set up to three backups.</p>' +
       '<div style="margin-top:14px"><span class="lk backlink" data-view="manage">← Back to Manage</span></div></div>' +
       '<div id="boardWrap"></div>';
     // load saved lineup (or start fresh) + registrants together
@@ -325,10 +325,33 @@
     return fresh;
   }
 
+  /* Fixed banner so the admin always knows WHICH match this team is for.
+     The registered count is live — it reflects state.regs for this match. */
+  function matchBannerHTML() {
+    var n = D.next || {};
+    var count = state.regs.length;
+    return '<div class="match-banner">' +
+      '<div class="accent-strip"></div>' +
+      '<div class="mb-body">' +
+        '<div class="mb-main">' +
+          '<div class="mono mb-tag">SELECTING TEAM FOR</div>' +
+          '<div class="mb-title">PSIA vs ' + escapeHtml(n.opp || 'TBD') + '</div>' +
+          '<div class="fx-meta mb-meta">' +
+            '<span>🗓 ' + escapeHtml(n.dateLong || 'Date TBD') + '</span>' +
+            (n.venue ? '<span class="dot">·</span><span>📍 ' + escapeHtml(n.venue) + '</span>' : '') +
+            (n.format ? '<span class="dot">·</span><span>' + escapeHtml(n.format) + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="mb-count"><b>' + count + '</b><span>registered</span></div>' +
+      '</div>' +
+    '</div>';
+  }
+
   function renderBoard() {
     var wrap = document.getElementById('boardWrap');
     if (!wrap) return;
     wrap.innerHTML =
+      matchBannerHTML() +
       '<div class="board-toolbar">' +
         '<div class="tb-left">' +
           '<label class="tb-formation">Formation' +
@@ -688,6 +711,7 @@
     if (e.target.id === 'formationSel') changeFormation(e.target.value);
   });
 
+
   // Enter key submits the registration form
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
@@ -705,4 +729,8 @@
 
   var prevAfter = window.PSIA_AFTER_RENDER;
   window.PSIA_AFTER_RENDER = function (view) {
-    if (typeof prevAfter === 'function') prevA
+    if (typeof prevAfter === 'function') prevAfter(view);
+    if (view === 'register') renderRegister();
+    else if (view === 'admin') renderAdmin();
+  };
+})();

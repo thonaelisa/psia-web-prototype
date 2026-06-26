@@ -272,4 +272,37 @@
       editPos = ep.getAttribute('data-au-epos');
       root().querySelectorAll('[data-au-epos]').forEach(function (c) { c.classList.remove('on'); });
       ep.classList.add('on');
-      retu
+      return;
+    }
+
+    if (t.closest('#demoBtn')) { doDemoSignIn(); return; }
+    if (t.closest('#siBtn')) { doSignIn(); return; }
+    if (t.closest('#suBtn')) { doSignUp(); return; }
+    if (t.closest('#pfSave')) { doSaveProfile(); return; }
+    if (t.closest('#signOutBtn')) { doSignOut(); return; }
+    // #goRegister is handled by app.js router via data-view
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !inAuth(e.target)) return;
+    var id = e.target.id;
+    if (id === 'siId') { e.preventDefault(); doSignIn(); }
+    else if (id === 'suName' || id === 'suEmail' || id === 'suPhone') { e.preventDefault(); doSignUp(); }
+  });
+
+  /* ============================================================
+     Hook into the router
+     ============================================================ */
+  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
+  window.PSIA_EXTRA_VIEWS.account = function () { return '<div id="authRoot" class="sqRoot"></div>'; };
+
+  var prevAfter = window.PSIA_AFTER_RENDER;
+  window.PSIA_AFTER_RENDER = function (view) {
+    if (typeof prevAfter === 'function') prevAfter(view);
+    paintHeader();
+    if (view === 'account') renderAccount();
+  };
+
+  // initial header paint once DOM is ready
+  paintHeader();
+})();

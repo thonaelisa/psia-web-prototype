@@ -416,4 +416,161 @@
 
   /* ---- Stats hero (statsphoto1) ---- */
   function statsHero(){
-    const L = rankedStatRo
+    const L = rankedStatRows()[0];
+    return `<header class="hero hero-stats">
+      <img class="hero-photo" src="assets/img/statsphoto1.jpg" alt="PSIA player stats">
+      <div class="hero-ov1"></div><div class="hero-ov2"></div>
+      <div class="hero-inner">
+        <div class="scorebug">
+          <div class="tag">LEADER</div>
+          <div class="body"><span class="h lead-bug">${L.n}</span><span class="div"></span><span class="time">${L.pts} PTS</span></div>
+        </div>
+        <div class="lower-third">
+          <div class="hero-eyebrow"><span class="bar"></span>SEASON 2026 · PLAYER STATS</div>
+          <h1 class="hero-h1">Player stats</h1>
+          <p class="hero-sub">Appearances, goals, assists, clean sheets and fantasy points across the season. Switch views or sort to find the form.</p>
+        </div>
+      </div>
+    </header>`;
+  }
+
+  /* ---- Player of the season feature ---- */
+  function leaderFeatureHTML(){
+    const L = rankedStatRows()[0];
+    return `<section class="sec">
+      ${shead('01','Player of the season', true)}
+      <div class="leadcard">
+        <div class="accent-strip"></div>
+        <div class="lead-grid">
+          <div class="lead-portrait"><img class="ph" src="${L.photo || 'assets/img/silhouette-portrait.svg'}" alt="${L.n}"></div>
+          <div class="lead-main">
+            <div class="lead-kicker">TOP FANTASY SCORER · #${L.rank}</div>
+            <h2 class="lead-name">${L.n}</h2>
+            <div class="lead-sub"><span class="poschip" style="${L.chip}">${posLabel(L.pos)}</span><span class="apps">${L.apps} appearances this season</span></div>
+            <div class="lead-stats">
+              <div class="lead-stat"><div class="v" style="color:var(--loss)">${L.g}</div><div class="k">GOALS</div></div>
+              <div class="lead-stat"><div class="v" style="color:var(--win)">${L.a}</div><div class="k">ASSISTS</div></div>
+              <div class="lead-stat"><div class="v" style="color:var(--blue-light)">${L.cs}</div><div class="k">CLEAN SHEETS</div></div>
+              <div class="lead-stat"><div class="v">${L.apps}</div><div class="k">APPS</div></div>
+            </div>
+          </div>
+          <div class="lead-pts"><div class="big">${L.pts}</div><div class="cap">FANTASY POINTS</div></div>
+        </div>
+      </div>
+    </section>`;
+  }
+
+  function viewStats(){
+    return `${statsHero()}
+    ${ticker()}
+    ${leaderFeatureHTML()}
+    <section class="sec last" style="padding-top:48px">
+      <div id="statsWrap">${statsPanelHTML()}</div>
+    </section>`;
+  }
+
+  function viewFantasy(){
+    const rows = D.fantasy.slice().sort((a,b)=>b.p-a.p);
+    return `<div class="page-head"><h1>Fantasy league</h1><p>Manager standings — points from real-match performances across the squad.</p></div>
+    <section class="sec last">
+      ${shead('01','Standings', true)}
+      <div class="tablecard"><table class="data">
+        <thead><tr><th style="width:60px">Rank</th><th>Team</th><th style="text-align:right">Points</th></tr></thead>
+        <tbody>${rows.map((t,i)=>`<tr><td class="rank">${i+1}</td><td class="nm">${t.n}</td><td class="pts gold">${t.p}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </section>`;
+  }
+
+  const VIEWS = { home:viewHome, matches:viewMatches, stats:viewStats, fantasy:viewFantasy };
+  /* extra views supplied by other modules (e.g. squad.js: register, admin) */
+  if(window.PSIA_EXTRA_VIEWS) Object.assign(VIEWS, window.PSIA_EXTRA_VIEWS);
+  const hdr = document.getElementById('hdr');
+
+  function setActive(v){
+    document.querySelectorAll('.nav-main a,.mobnav a').forEach(a=>a.classList.toggle('active', a.dataset.view===v && !a.dataset.scroll));
+  }
+  /* ---- next-fixture countdown (matches page) ---- */
+  let cdTimer = null;
+  const cdPad = n => String(n).padStart(2,'0');
+  function nextKickoff(){
+    const s = (D.next && D.next.dateLong) || '';
+    const m = s.match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})[^\d]*(\d{1,2}):(\d{2})/);
+    if(!m) return null;
+    const mo = {JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12}[m[2].toUpperCase()];
+    if(!mo) return null;
+    const t = new Date(`${m[3]}-${cdPad(mo)}-${cdPad(+m[1])}T${cdPad(+m[4])}:${m[5]}:00+07:00`).getTime();
+    return isNaN(t) ? null : t;
+  }
+  function tickCountdown(){
+    const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+    const t = nextKickoff();
+    if(t==null){ ['cdDD','cdHH','cdMM','cdSS'].forEach(id=>set(id,'--')); return; }
+    const d = Math.max(0, t - Date.now());
+    set('cdDD', cdPad(Math.floor(d/86400000)));
+    set('cdHH', cdPad(Math.floor((d%86400000)/3600000)));
+    set('cdMM', cdPad(Math.floor((d%3600000)/60000)));
+    set('cdSS', cdPad(Math.floor((d%60000)/1000)));
+  }
+  function syncCountdown(){
+    if(cdTimer){ clearInterval(cdTimer); cdTimer=null; }
+    if(!document.getElementById('cdSS')) return;
+    tickCountdown();
+    cdTimer = setInterval(tickCountdown, 1000);
+  }
+
+  function afterRender(view){
+    hdr.classList.toggle('over-hero', view==='home' || view==='matches' || view==='register' || view==='stats');
+    const mob = document.getElementById('mobnav'); if(mob) mob.style.display='none';
+    syncCountdown();
+    if(typeof window.PSIA_AFTER_RENDER==='function') window.PSIA_AFTER_RENDER(view);
+  }
+  function show(v, scroll){
+    document.getElementById('app').innerHTML = (VIEWS[v]||viewHome)();
+    afterRender(v); setActive(v);
+    if(scroll){ const el=document.getElementById(scroll); if(el) setTimeout(()=>el.scrollIntoView({behavior:'smooth'}),30); }
+    else window.scrollTo({top:0,behavior:'auto'});
+  }
+  function openMatch(id){
+    const m = D.results.find(r=>r.id===id);
+    if(!m) return show('matches');
+    document.getElementById('app').innerHTML = viewMatch(m);
+    afterRender('match'); setActive('matches');
+    window.scrollTo({top:0,behavior:'auto'});
+  }
+
+  document.addEventListener('click', e=>{
+    /* stats view-mode toggle — re-render only the panel, keep scroll position */
+    const modeEl = e.target.closest('[data-statmode]');
+    if(modeEl){
+      statsMode = modeEl.dataset.statmode;
+      const wrap = document.getElementById('statsWrap');
+      if(wrap) wrap.innerHTML = statsPanelHTML();
+      return;
+    }
+    /* sortable stats header (compact mode) — re-render only the panel */
+    const sortEl = e.target.closest('[data-sort]');
+    if(sortEl){
+      const k = sortEl.dataset.sort;
+      if(statSort.key === k){ statSort.dir = statSort.dir==='asc' ? 'desc' : 'asc'; }
+      else { statSort = { key:k, dir: k==='n' ? 'asc' : 'desc' }; }
+      const wrap = document.getElementById('statsWrap');
+      if(wrap) wrap.innerHTML = statsPanelHTML();
+      return;
+    }
+    const match = e.target.closest('[data-match]');
+    if(match){ e.preventDefault(); openMatch(match.dataset.match); return; }
+    const a = e.target.closest('[data-view],[data-scroll]');
+    if(a){
+      e.preventDefault();
+      if(a.dataset.scroll && !a.dataset.view) show('home', a.dataset.scroll);
+      else show(a.dataset.view, a.dataset.scroll);
+    }
+  });
+  const mt = document.getElementById('mtoggle');
+  if(mt) mt.addEventListener('click', ()=>{ const m=document.getElementById('mobnav'); m.style.display = m.style.display==='flex'?'none':'flex'; });
+
+  /* expose the router so other modules can navigate */
+  window.PSIA_APP = { show, openMatch };
+
+  show('home');
+})();

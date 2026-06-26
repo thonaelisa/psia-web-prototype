@@ -471,4 +471,218 @@
   function handleExcelFile(input) {
     var file = input.files && input.files[0];
     if (!file) return;
-    excelState.fileName = file.name; excelState.error = null; excelState.par
+    excelState.fileName = file.name; excelState.error = null; excelState.parsed = null;
+    ensureXLSX(function () {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          var wb = window.XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+          excelState.parsed = parseWorkbook(wb);
+          excelState.error = null;
+        } catch (err) {
+          excelState.parsed = null;
+          excelState.error = (err && err.message) ? err.message : 'Could not read that file.';
+        }
+        rerenderBody();
+      };
+      reader.onerror = function () { excelState.error = 'Could not read that file.'; rerenderBody(); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+  function confirmExcel() {
+    var p = excelState.parsed; if (!p) return;
+    draft.scorers = clone(p.scorers);
+    draft.fantasy = clone(p.fantasy);
+    draft.statsTable = clone(p.statsTable);
+    markDirty();
+    save();                       // persist overlay + reflect on public views
+    excelState.parsed = null;     // close the preview
+    msg('Top scorers, fantasy and player stats updated from ' + esc(excelState.fileName) + '.');
+    rerenderBody();
+  }
+
+  function previewTable(title, head, rows) {
+    return '<div class="mng-xl-prev"><div class="mng-xl-cap">' + title + '</div>' +
+      '<table class="data"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>';
+  }
+  function excelHTML() {
+    var p = excelState.parsed;
+    var inner;
+    if (excelState.loading) {
+      inner = '<div class="mng-xl-status">Loading the Excel reader…</div>';
+    } else if (p) {
+      var sc = previewTable('Top scorers · ' + p.scorers.length, ['Player', 'Goals'],
+        p.scorers.map(function (x) { return '<tr><td class="nm">' + esc(x.n) + '</td><td class="num">' + x.g + '</td></tr>'; }).join(''));
+      var fy = previewTable('Fantasy · ' + p.fantasy.length, ['Player', 'Points'],
+        p.fantasy.map(function (x) { return '<tr><td class="nm">' + esc(x.n) + '</td><td class="num">' + x.p + '</td></tr>'; }).join(''));
+      var stRows = p.statsTable.map(function (x) {
+        return '<tr><td class="nm">' + esc(x.n) + '</td><td>' + esc(x.pos || '—') + '</td><td class="num">' + x.apps + '</td><td class="num">' + x.g + '</td><td class="num">' + x.a + '</td><td class="num">' + x.cs + '</td><td class="num">' + x.pts + '</td></tr>';
+      }).join('');
+      var st = previewTable('Player stats · ' + p.statsTable.length, ['Player', 'Pos', 'Apps', 'G', 'A', 'CS', 'Pts'], stRows);
+      inner =
+        '<div class="mng-xl-ok">✓ Read <b>' + esc(excelState.fileName) + '</b> — ' +
+          p.counts.lb + ' fantasy rows, ' + p.counts.stats + ' player rows. Preview below.</div>' +
+        '<div class="mng-xl-grid">' + sc + fy + '</div>' + st +
+        '<div class="mng-xl-actions">' +
+          '<button class="btn btn-glass btn-sm" id="xlCancel">Cancel</button>' +
+          '<button class="btn btn-primary btn-sm" id="xlConfirm">✓ Confirm &amp; save these 3 updates</button>' +
+        '</div>';
+    } else {
+      inner = '<button class="btn btn-primary btn-sm" id="xlPick">⬆ Choose workbook (.xlsx)</button>' +
+        (excelState.fileName ? '<span class="mng-xl-file">Last: ' + esc(excelState.fileName) + '</span>' : '');
+    }
+    return '<div class="mng-card">' +
+      '<div class="mng-h">Update from the fantasy workbook <em>scorers · fantasy · player stats</em></div>' +
+      '<p class="mng-p">Upload the current <code>PS IA-ITB Fantasy League 2026.xlsx</code>. It reads the ' +
+      '<b>Fantasy Points</b>, <b>Player Stats</b> and <b>Player Database</b> sheets, then shows a preview. ' +
+      'Confirm to update <b>Top scorers</b>, <b>Fantasy</b> and <b>Player stats</b> together — then it saves. ' +
+      'Nothing else on the site is touched.</p>' +
+      (excelState.error ? '<div class="mng-xl-err">⚠ ' + esc(excelState.error) + '</div>' : '') +
+      inner +
+      '<input type="file" id="xlFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" />' +
+    '</div>';
+  }
+
+  /* ---- PUBLISH & BACKUP --------------------------------------- */
+  function backupHTML() {
+    return '<div class="mng-card">' +
+      '<div class="mng-h">Publish to everyone</div>' +
+      '<p class="mng-p">Your saved changes show on this device now. To update the <b>live site for all visitors</b>, ' +
+      'download a fresh <code>data.js</code> and send it to whoever maintains the website — they replace ' +
+      '<code>assets/js/data.js</code> with it. That is the only technical step, and it takes seconds.</p>' +
+      '<div class="mng-actions">' +
+        '<button class="btn btn-primary btn-sm" id="dlData">⬇ Download data.js (to publish)</button>' +
+        '<button class="btn btn-glass btn-sm" id="dlJson">⬇ Download backup (.json)</button>' +
+      '</div>' +
+      '<div class="mng-h" style="margin-top:28px">Restore</div>' +
+      '<p class="mng-p">Revert everything on this device back to the version the site shipped with. ' +
+      'This clears your local edits — export a backup first if unsure.</p>' +
+      '<button class="btn btn-glass btn-sm" id="revertAll">↺ Revert to shipped version</button>' +
+    '</div>';
+  }
+
+  function download(name, text, type) {
+    var blob = new Blob([text], { type: type || 'text/plain' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+  }
+  function buildDataJs() {
+    var full = clone(window.PSIA_DATA);
+    KEYS.forEach(function (k) { if (draft[k] != null) full[k] = draft[k]; });
+    return '/* PSIA Website - content. Edited in the Manage page on ' +
+      new Date().toISOString().slice(0, 10) + '. Replaces assets/js/data.js to publish. */\n' +
+      'window.PSIA_DATA = ' + JSON.stringify(full, null, 2) + ';\n';
+  }
+
+  /* ===============================================================
+     SAVE / EVENTS
+     =============================================================== */
+  function msg(text, isErr) {
+    var m = document.getElementById('mngMsg');
+    if (!m) return;
+    m.textContent = text; m.className = 'mng-msg' + (isErr ? ' err' : ' ok');
+    clearTimeout(msg._t); msg._t = setTimeout(function () { if (m) { m.textContent = ''; m.className = 'mng-msg'; } }, 3500);
+  }
+  function normalize() {
+    // numbers as numbers; auto-fill result + id on results
+    ['filled', 'slots'].forEach(function (f) { if (draft.next[f] !== '' && draft.next[f] != null) draft.next[f] = +draft.next[f] || 0; });
+    ['wins', 'draws', 'losses', 'goals'].forEach(function (f) { draft.season[f] = +draft.season[f] || 0; });
+    draft.results.forEach(function (r) {
+      r.sp = +r.sp || 0; r.so = +r.so || 0;
+      if (!r.r) r.r = autoResult(r.sp, r.so);
+      if (!r.id) r.id = slug(r.opp, r.date);
+      ['format', 'video', 'photos', 'stats', 'venue'].forEach(function (f) { if (r[f] == null) r[f] = ''; });
+    });
+    draft.scorers.forEach(function (s) { s.g = +s.g || 0; });
+    draft.fantasy.forEach(function (s) { s.p = +s.p || 0; });
+    draft.statsTable.forEach(function (s) { ['apps', 'g', 'a', 'cs', 'pts'].forEach(function (f) { s[f] = +s[f] || 0; }); });
+  }
+  function save() {
+    normalize();
+    var overlay = {}; KEYS.forEach(function (k) { overlay[k] = clone(draft[k]); });
+    STORE.saveContent(overlay).then(function () {
+      applyOverlay(overlay);           // reflect immediately in public views
+      dirty = false;
+      var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'hidden';
+      rerenderBody();
+      msg('Saved. Changes are live on this device — use Publish to share.');
+    }).catch(function () { msg('Could not save.', true); });
+  }
+  function discard() {
+    loadDraft(); rerenderBody();
+    var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'hidden';
+    msg('Changes discarded.');
+  }
+  function revertAll() {
+    if (!window.confirm('Revert to the shipped version and clear local edits on this device?')) return;
+    STORE.resetContent().then(function () {
+      window.PSIA_DATA = JSON.parse(JSON.stringify(window.PSIA_DATA_ORIGINAL));
+      loadDraft(); rerenderBody();
+      msg('Reverted to the shipped version.');
+    });
+  }
+
+  /* read an edited field back into the draft */
+  function onInput(e) {
+    var t = e.target;
+    if (t && t.id === 'xlFile') { handleExcelFile(t); return; }
+    var k = t.getAttribute && t.getAttribute('data-k');
+    if (!k || !draft[k]) return;
+    var f = t.getAttribute('data-f');
+    var iAttr = t.getAttribute('data-i');
+    if (iAttr == null) { draft[k][f] = t.value; }
+    else { var i = +iAttr; if (draft[k][i]) draft[k][i][f] = t.value; }
+    markDirty();
+  }
+
+  function blankRow(k) {
+    if (k === 'results') return { id: '', date: '', opp: '', sp: 0, so: 0, r: '', venue: '', format: '', video: '', photos: '', stats: '' };
+    if (k === 'scorers') return { n: '', g: 0 };
+    if (k === 'fantasy') return { n: '', p: 0 };
+    if (k === 'statsTable') return { n: '', pos: '', apps: 0, g: 0, a: 0, cs: 0, pts: 0 };
+    return {};
+  }
+
+  function onClick(e) {
+    var t = e.target;
+    var gateBtn = t.closest && t.closest('#mngGateBtn'); if (gateBtn) { tryUnlock(); return; }
+    if (!unlocked()) return;
+    var tb = t.closest && t.closest('[data-tab]');
+    if (tb) { tab = tb.getAttribute('data-tab'); render(); return; }
+    var add = t.closest && t.closest('[data-add]');
+    if (add) { var ak = add.getAttribute('data-add'); if (ak === 'results') draft[ak].unshift(blankRow(ak)); else draft[ak].push(blankRow(ak)); markDirty(); rerenderBody(); return; }
+    var del = t.closest && t.closest('[data-del]');
+    if (del) { var dk = del.getAttribute('data-del'), di = +del.getAttribute('data-i'); draft[dk].splice(di, 1); markDirty(); rerenderBody(); return; }
+    if (t.closest && t.closest('#mngSave')) { save(); return; }
+    if (t.closest && t.closest('#mngDiscard')) { discard(); return; }
+    if (t.closest && t.closest('#xlPick')) { var fi = document.getElementById('xlFile'); if (fi) fi.click(); return; }
+    if (t.closest && t.closest('#xlConfirm')) { confirmExcel(); return; }
+    if (t.closest && t.closest('#xlCancel')) { excelState.parsed = null; excelState.error = null; rerenderBody(); return; }
+    if (t.closest && t.closest('#nxFill')) { fillNextDate(); return; }
+    if (t.closest && t.closest('#seasonAuto')) { seasonAuto(); return; }
+    if (t.closest && t.closest('#revertAll')) { revertAll(); return; }
+    if (t.closest && t.closest('#dlData')) { normalize(); download('data.js', buildDataJs(), 'text/javascript'); msg('data.js downloaded — send it to the site maintainer.'); return; }
+    if (t.closest && t.closest('#dlJson')) { normalize(); var o = {}; KEYS.forEach(function (k) { o[k] = draft[k]; }); download('psia-content-backup.json', JSON.stringify(o, null, 2), 'application/json'); msg('Backup downloaded.'); return; }
+  }
+  function onKey(e) { if (e.key === 'Enter' && document.getElementById('mngGate')) { e.preventDefault(); tryUnlock(); } }
+
+  document.addEventListener('input', onInput);
+  document.addEventListener('change', onInput);
+  document.addEventListener('click', onClick);
+  document.addEventListener('keydown', onKey);
+
+  /* ===============================================================
+     REGISTER THE VIEW (chain PSIA_AFTER_RENDER, add to EXTRA_VIEWS)
+     =============================================================== */
+  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
+  window.PSIA_EXTRA_VIEWS.manage = function () { return '<div id="mngRoot"></div>'; };
+
+  var prevAfter = window.PSIA_AFTER_RENDER;
+  window.PSIA_AFTER_RENDER = function (view) {
+    if (typeof prevAfter === 'function') prevAfter(view);
+    if (view === 'manage') render();
+  };
+})();

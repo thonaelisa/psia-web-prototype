@@ -312,4 +312,75 @@
         note: data.note, accountId: data.accountId
       });
     },
-    unregister: function (id) { return this._backend.removeReg
+    unregister: function (id) { return this._backend.removeRegistration(id); },
+
+    // --- lineup --------------------------------------------------------
+    getLineup: function (matchId) { return this._backend.getLineup(matchId); },
+    saveLineup: function (matchId, lineup) { return this._backend.saveLineup(matchId, lineup); },
+
+    // --- content overlay (admin "Manage" page) -------------------------
+    CONTENT_KEYS: ['next', 'season', 'results', 'scorers', 'fantasy', 'statsTable'],
+    getContentSync: function () { return this._backend.getContentSync(); },
+    getContent: function () { return this._backend.getContent(); },
+    saveContent: function (overlay) { return this._backend.saveContent(overlay); },
+    resetContent: function () { return this._backend.resetContent(); },
+
+    // --- accounts / session -------------------------------------------
+    createAccount: function (profile) {
+      if (!profile || !profile.name || !profile.name.trim()) {
+        return Promise.reject(new Error('Enter your name.'));
+      }
+      if (POSITIONS.indexOf(profile.position) === -1) {
+        return Promise.reject(new Error('Pick your usual position.'));
+      }
+      return this._backend.createAccount(profile);
+    },
+    signIn: function (identifier) {
+      if (!identifier || !identifier.trim()) return Promise.reject(new Error('Enter your email or phone.'));
+      return this._backend.signIn(identifier);
+    },
+    signOut: function () { return this._backend.signOut(); },
+    currentUser: function () { return this._backend.currentUser(); },
+    ensureDemoAccount: function (profile) { return this._backend.ensureAccount(profile); },
+    updateProfile: function (patch) { return this._backend.updateAccount(patch || {}); },
+
+    // --- demo helpers (no backend yet) --------------------------------
+    seedDemo: function (matchId) {
+      var pool = (window.PSIA_DATA && window.PSIA_DATA.statsTable) || [];
+      var rows = pool
+        .filter(function (p) { return p.n && p.n.trim(); })
+        .slice(0, 20)
+        .map(function (p) {
+          return {
+            id: uid(), matchId: matchId, name: p.n.trim(),
+            position: normalizePos(p.pos), note: '', ts: Date.now() + Math.random()
+          };
+        });
+      // guarantee at least one keeper for a sensible demo
+      if (!rows.some(function (r) { return r.position === 'GK'; }) && rows.length) {
+        rows[0].position = 'GK';
+      }
+      return this._backend.replaceRegistrations(matchId, rows);
+    },
+
+    // --- export / import (handy even with a backend) ------------------
+    exportMatch: function (matchId) {
+      var self = this;
+      return Promise.all([this.getRegistrations(matchId), this.getLineup(matchId)])
+        .then(function (res) {
+          return { matchId: matchId, registrations: res[0], lineup: res[1], exportedAt: Date.now() };
+        });
+    },
+    importMatch: function (payload) {
+      var self = this;
+      if (!payload || !payload.matchId) return Promise.reject(new Error('Invalid payload'));
+      var p = this._backend.replaceRegistrations(payload.matchId, payload.registrations || []);
+      if (payload.lineup) {
+        p = p.then(function () { return self.saveLineup(payload.matchId, payload.lineup); });
+      }
+      return p;
+    }
+  };
+
+  window.PSIA_STORE = Store;
+})();
