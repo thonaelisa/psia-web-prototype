@@ -1,0 +1,28 @@
+<svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="PS IA-ITB crest">
+  <defs>
+    <linearGradient id="psiaNavy" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#15233F"/>
+      <stop offset="1" stop-color="#0A1326"/>
+    </linearGradient>
+  </defs>
+  <!-- badge -->
+  <circle cx="60" cy="60" r="55" fill="url(#psiaNavy)" stroke="#F5C542" stroke-width="5"/>
+  <circle cx="60" cy="60" r="47.5" fill="none" stroke="#3D7BF0" stroke-width="2" opacity=".55"/>
+  <!-- football -->
+  <g transform="translate(60,49)">
+    <circle r="24" fill="#EEF3FB"/>
+    <circle r="24" fill="none" stroke="#3D7BF0" stroke-width="1.5" opacity=".4"/>
+    <polygon points="0,-9 8.56,-2.78 5.29,7.28 -5.29,7.28 -8.56,-2.78" fill="#0A1326"/>
+    <g stroke="#0A1326" stroke-width="2.4" fill="none" stroke-linecap="round">
+      <path d="M0,-9 L0,-22.5"/>
+      <path d="M8.56,-2.78 L20.9,-6.8"/>
+      <path d="M5.29,7.28 L12.9,17.8"/>
+      <path d="M-5.29,7.28 L-12.9,17.8"/>
+      <path d="M-8.56,-2.78 L-20.9,-6.8"/>
+    </g>
+  </g>
+  <!-- banner -->
+  <rect x="23" y="85" width="74" height="21" rx="4.5" fill="#3D7BF0"/>
+  <rect x="23" y="85" width="74" height="21" rx="4.5" fill="none" stroke="#F5C542" stroke-width="1.4" opacity=".8"/>
+  <text x="60" y="100.5" text-anchor="middle" font-family="Archivo, Arial, sans-serif" font-weight="900" font-size="14" letter-spacing="2.5" fill="#FFFFFF">PSIA</text>
+</svg>

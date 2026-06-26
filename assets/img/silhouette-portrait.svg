@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Profile photo placeholder">
+  <defs>
+    <linearGradient id="pbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#13213E"/>
+      <stop offset="1" stop-color="#0A1326"/>
+    </linearGradient>
+    <radialGradient id="pglow" cx="50%" cy="34%" r="55%">
+      <stop offset="0" stop-color="#3D7BF0" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#3D7BF0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="pfig" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#36456180"/>
+      <stop offset="1" stop-color="#22324E80"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="500" fill="url(#pbg)"/>
+  <rect width="400" height="500" fill="url(#pglow)"/>
+  <g fill="url(#pfig)">
+    <circle cx="200" cy="188" r="86"/>
+    <ellipse cx="200" cy="500" rx="178" ry="160"/>
+  </g>
+</svg>

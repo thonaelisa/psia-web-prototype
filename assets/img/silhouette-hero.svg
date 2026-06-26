@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Player photo placeholder">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0E1C3A"/>
+      <stop offset="0.55" stop-color="#0A1228"/>
+      <stop offset="1" stop-color="#070C18"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="34%" r="46%">
+      <stop offset="0" stop-color="#3D7BF0" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#3D7BF0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fig" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#33425E"/>
+      <stop offset="1" stop-color="#1E2C46"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="600" fill="url(#bg)"/>
+  <rect width="1200" height="600" fill="url(#glow)"/>
+  <g fill="url(#fig)">
+    <circle cx="600" cy="232" r="104"/>
+    <ellipse cx="600" cy="600" rx="262" ry="226"/>
+  </g>
+</svg>
