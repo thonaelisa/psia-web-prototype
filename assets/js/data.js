@@ -452,4 +452,8 @@ window.PSIA_DATA = {
       "pts": 79
     }
   ],
-  
+  "treasury": {
+    "opening_balance": 0,
+    "entries": []
+  }
+};

@@ -626,4 +626,382 @@
     if (!raw) return '';
     var s = String(raw).toUpperCase();
     if (s.indexOf('GK') >= 0) return 'GK';
-    if (['ST', 'CF', 'AMR', 'AML', 'FW', 'WING'].some(function (t) { return s.ind
+    if (['ST', 'CF', 'AMR', 'AML', 'FW', 'WING'].some(function (t) { return s.indexOf(t) >= 0; })) return 'FWD';
+    if (['CB', 'LB', 'RB', 'WB', 'DF'].some(function (t) { return s.indexOf(t) >= 0; })) return 'DEF';
+    if (['DM', 'CM', 'AMC', 'MF', 'MID'].some(function (t) { return s.indexOf(t) >= 0; })) return 'MID';
+    return '';
+  }
+  function cellV(ws, r, c) { var a = window.XLSX.utils.encode_cell({ r: r, c: c }); var x = ws[a]; return x ? x.v : null; }
+  function wsRange(ws) { return ws['!ref'] ? window.XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }; }
+  function findCol(ws, hRow, pred) {
+    var rg = wsRange(ws);
+    for (var c = rg.s.c; c <= rg.e.c; c++) {
+      var v = cellV(ws, hRow, c);
+      if (v != null && pred(String(v).trim().toLowerCase())) return c;
+    }
+    return -1;
+  }
+  function needSheet(wb, name) {
+    var s = wb.Sheets[name];
+    if (!s) throw new Error('Couldn’t find the "' + name + '" sheet. Found: ' + wb.SheetNames.join(', '));
+    return s;
+  }
+
+  /* The actual parse — mirrors tools/convert.py exactly. */
+  function parseWorkbook(wb) {
+    var X = window.XLSX;
+    // --- Fantasy Points: PLAYER + TOTAL POINTS, header row 1, data from row 4
+    var fp = needSheet(wb, 'Fantasy Points');
+    var fpPlayer = findCol(fp, 0, function (s) { return s === 'player'; });
+    var fpTotal = findCol(fp, 0, function (s) { return s === 'total points'; });
+    if (fpTotal < 0) fpTotal = findCol(fp, 0, function (s) { return s.indexOf('total') === 0; });
+    if (fpPlayer < 0 || fpTotal < 0) throw new Error('"Fantasy Points" sheet is missing a PLAYER or TOTAL POINTS column.');
+    var lb = [], rg = wsRange(fp);
+    for (var r = 3; r <= rg.e.r; r++) {
+      var nm = cellV(fp, r, fpPlayer);
+      if (!nm || !String(nm).trim()) continue;
+      lb.push({ full: String(nm).trim(), total: n2i(cellV(fp, r, fpTotal)) });
+    }
+
+    // --- Player Stats: header row 5, data from row 6
+    var ps = needSheet(wb, 'Player Stats');
+    var psPlayer = findCol(ps, 4, function (s) { return s === 'player'; });
+    var psCaps = findCol(ps, 4, function (s) { return s === 'caps'; });
+    var psGoal = findCol(ps, 4, function (s) { return s === 'goal' || s === 'goals'; });
+    var psAst = findCol(ps, 4, function (s) { return s === 'assist' || s === 'assists'; });
+    var psCs = findCol(ps, 4, function (s) { return s.indexOf('clean') >= 0; });
+    if (psPlayer < 0) throw new Error('"Player Stats" sheet is missing its PLAYER column (expected headers on row 5).');
+    var stats = [], rg2 = wsRange(ps);
+    for (var r2 = 5; r2 <= rg2.e.r; r2++) {
+      var nm2 = cellV(ps, r2, psPlayer);
+      if (!nm2 || !String(nm2).trim()) continue;
+      stats.push({
+        full: String(nm2).trim(),
+        caps: n2i(cellV(ps, r2, psCaps)), goals: n2i(cellV(ps, r2, psGoal)),
+        assists: n2i(cellV(ps, r2, psAst)), cs: n2i(cellV(ps, r2, psCs))
+      });
+    }
+
+    // --- Player Database: name (col A) + position, header row 1, data from row 2
+    var posByName = {};
+    var pdb = wb.Sheets['Player Database'];
+    if (pdb) {
+      var pdName = findCol(pdb, 0, function (s) { return s.indexOf('nama lengkap') >= 0; });
+      if (pdName < 0) pdName = 0;
+      var pdPos = findCol(pdb, 0, function (s) { return s.indexOf('position') >= 0; });
+      if (pdPos < 0) pdPos = 2;
+      var rg3 = wsRange(pdb);
+      for (var r3 = 1; r3 <= rg3.e.r; r3++) {
+        var nm3 = cellV(pdb, r3, pdName);
+        if (!nm3 || !String(nm3).trim()) continue;
+        posByName[nrm(nm3)] = posBucket(cellV(pdb, r3, pdPos));
+      }
+    }
+
+    // --- assemble (same rules as convert.py)
+    var totalByName = {}; lb.forEach(function (p) { totalByName[nrm(p.full)] = p.total; });
+
+    var scorers = stats.filter(function (p) { return p.goals > 0; })
+      .sort(function (a, b) { return b.goals - a.goals; })
+      .slice(0, TOP_SCORERS)
+      .map(function (p) { return { n: disp(p.full), g: p.goals }; });
+
+    var fantasy = lb.slice(0, TOP_FANTASY).map(function (p) { return { n: disp(p.full), p: p.total }; });
+
+    var statsTable = stats.map(function (p) {
+      return {
+        n: disp(p.full), pos: posByName[nrm(p.full)] || '',
+        apps: p.caps, g: p.goals, a: p.assists, cs: p.cs, pts: (totalByName[nrm(p.full)] || 0)
+      };
+    }).sort(function (a, b) { return b.pts - a.pts; }).slice(0, TOP_STATS);
+
+    if (!scorers.length && !fantasy.length && !statsTable.length) {
+      throw new Error('The workbook opened but no player rows were found. Is this the right file?');
+    }
+    return { scorers: scorers, fantasy: fantasy, statsTable: statsTable, counts: { lb: lb.length, stats: stats.length } };
+  }
+
+  function loadScript(src, ok, fail) {
+    var s = document.createElement('script');
+    s.src = src; s.onload = ok; s.onerror = fail;
+    document.head.appendChild(s);
+  }
+  function ensureXLSX(cb) {
+    if (window.XLSX) return cb();
+    excelState.loading = true; rerenderBody();
+    // Try the bundled copy first (works offline); fall back to the CDN.
+    loadScript(XLSX_LOCAL,
+      function () { excelState.loading = false; cb(); },
+      function () {
+        loadScript(XLSX_CDN,
+          function () { excelState.loading = false; cb(); },
+          function () {
+            excelState.loading = false;
+            excelState.error = 'Could not load the Excel reader. Make sure assets/js/vendor/xlsx.full.min.js exists (or connect to the internet).';
+            rerenderBody();
+          });
+      });
+  }
+  function handleExcelFile(input) {
+    var file = input.files && input.files[0];
+    if (!file) return;
+    excelState.fileName = file.name; excelState.error = null; excelState.parsed = null;
+    ensureXLSX(function () {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          var wb = window.XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+          excelState.parsed = parseWorkbook(wb);
+          excelState.error = null;
+        } catch (err) {
+          excelState.parsed = null;
+          excelState.error = (err && err.message) ? err.message : 'Could not read that file.';
+        }
+        rerenderBody();
+      };
+      reader.onerror = function () { excelState.error = 'Could not read that file.'; rerenderBody(); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+  function confirmExcel() {
+    var p = excelState.parsed; if (!p) return;
+    draft.scorers = clone(p.scorers);
+    draft.fantasy = clone(p.fantasy);
+    draft.statsTable = clone(p.statsTable);
+    markDirty();
+    save();                       // persist overlay + reflect on public views
+    excelState.parsed = null;     // close the preview
+    msg('Top scorers, fantasy and player stats updated from ' + esc(excelState.fileName) + '.');
+    rerenderBody();
+  }
+
+  function previewTable(title, head, rows) {
+    return '<div class="mng-xl-prev"><div class="mng-xl-cap">' + title + '</div>' +
+      '<table class="data"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>';
+  }
+  function excelHTML() {
+    var p = excelState.parsed;
+    var inner;
+    if (excelState.loading) {
+      inner = '<div class="mng-xl-status">Loading the Excel reader…</div>';
+    } else if (p) {
+      var sc = previewTable('Top scorers · ' + p.scorers.length, ['Player', 'Goals'],
+        p.scorers.map(function (x) { return '<tr><td class="nm">' + esc(x.n) + '</td><td class="num">' + x.g + '</td></tr>'; }).join(''));
+      var fy = previewTable('Fantasy · ' + p.fantasy.length, ['Player', 'Points'],
+        p.fantasy.map(function (x) { return '<tr><td class="nm">' + esc(x.n) + '</td><td class="num">' + x.p + '</td></tr>'; }).join(''));
+      var stRows = p.statsTable.map(function (x) {
+        return '<tr><td class="nm">' + esc(x.n) + '</td><td>' + esc(x.pos || '—') + '</td><td class="num">' + x.apps + '</td><td class="num">' + x.g + '</td><td class="num">' + x.a + '</td><td class="num">' + x.cs + '</td><td class="num">' + x.pts + '</td></tr>';
+      }).join('');
+      var st = previewTable('Player stats · ' + p.statsTable.length, ['Player', 'Pos', 'Apps', 'G', 'A', 'CS', 'Pts'], stRows);
+      inner =
+        '<div class="mng-xl-ok">✓ Read <b>' + esc(excelState.fileName) + '</b> — ' +
+          p.counts.lb + ' fantasy rows, ' + p.counts.stats + ' player rows. Preview below.</div>' +
+        '<div class="mng-xl-grid">' + sc + fy + '</div>' + st +
+        '<div class="mng-xl-actions">' +
+          '<button class="btn btn-glass btn-sm" id="xlCancel">Cancel</button>' +
+          '<button class="btn btn-primary btn-sm" id="xlConfirm">✓ Confirm &amp; save these 3 updates</button>' +
+        '</div>';
+    } else {
+      inner = '<button class="btn btn-primary btn-sm" id="xlPick">⬆ Choose workbook (.xlsx)</button>' +
+        (excelState.fileName ? '<span class="mng-xl-file">Last: ' + esc(excelState.fileName) + '</span>' : '');
+    }
+    return '<div class="mng-card">' +
+      '<div class="mng-h">Update from the fantasy workbook <em>scorers · fantasy · player stats</em></div>' +
+      '<p class="mng-p">Upload the current <code>PS IA-ITB Fantasy League 2026.xlsx</code>. It reads the ' +
+      '<b>Fantasy Points</b>, <b>Player Stats</b> and <b>Player Database</b> sheets, then shows a preview. ' +
+      'Confirm to update <b>Top scorers</b>, <b>Fantasy</b> and <b>Player stats</b> together — then it saves. ' +
+      'Nothing else on the site is touched.</p>' +
+      (excelState.error ? '<div class="mng-xl-err">⚠ ' + esc(excelState.error) + '</div>' : '') +
+      inner +
+      '<input type="file" id="xlFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" />' +
+    '</div>';
+  }
+
+  /* ---- PUBLISH & BACKUP --------------------------------------- */
+  function backupHTML() {
+    return '<div class="mng-card">' +
+      '<div class="mng-h">Publish to everyone</div>' +
+      '<p class="mng-p">Your saved changes show on this device now. To update the <b>live site for all visitors</b>, ' +
+      'download a fresh <code>data.js</code> and send it to whoever maintains the website — they replace ' +
+      '<code>assets/js/data.js</code> with it. That is the only technical step, and it takes seconds.</p>' +
+      '<div class="mng-actions">' +
+        '<button class="btn btn-primary btn-sm" id="dlData">⬇ Download data.js (to publish)</button>' +
+        '<button class="btn btn-glass btn-sm" id="dlJson">⬇ Download backup (.json)</button>' +
+      '</div>' +
+      '<div class="mng-h" style="margin-top:28px">Restore</div>' +
+      '<p class="mng-p">Revert everything on this device back to the version the site shipped with. ' +
+      'This clears your local edits — export a backup first if unsure.</p>' +
+      '<button class="btn btn-glass btn-sm" id="revertAll">↺ Revert to shipped version</button>' +
+    '</div>';
+  }
+
+  function download(name, text, type) {
+    var blob = new Blob([text], { type: type || 'text/plain' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+  }
+  function buildDataJs() {
+    var full = clone(window.PSIA_DATA);
+    KEYS.forEach(function (k) { if (draft[k] != null) full[k] = draft[k]; });
+    return '/* PSIA Website - content. Edited in the Manage page on ' +
+      new Date().toISOString().slice(0, 10) + '. Replaces assets/js/data.js to publish. */\n' +
+      'window.PSIA_DATA = ' + JSON.stringify(full, null, 2) + ';\n';
+  }
+
+  /* ===============================================================
+     SAVE / EVENTS
+     =============================================================== */
+  function msg(text, isErr) {
+    var m = document.getElementById('mngMsg');
+    if (!m) return;
+    m.textContent = text; m.className = 'mng-msg' + (isErr ? ' err' : ' ok');
+    clearTimeout(msg._t); msg._t = setTimeout(function () { if (m) { m.textContent = ''; m.className = 'mng-msg'; } }, 3500);
+  }
+  function normalize() {
+    // numbers as numbers; auto-fill result + id on results
+    ['filled', 'slots'].forEach(function (f) { if (draft.next[f] !== '' && draft.next[f] != null) draft.next[f] = +draft.next[f] || 0; });
+    ['wins', 'draws', 'losses', 'goals'].forEach(function (f) { draft.season[f] = +draft.season[f] || 0; });
+    draft.results.forEach(function (r) {
+      r.sp = +r.sp || 0; r.so = +r.so || 0;
+      if (!r.r) r.r = autoResult(r.sp, r.so);
+      if (!r.id) r.id = slug(r.opp, r.date);
+      ['format', 'video', 'photos', 'stats', 'venue'].forEach(function (f) { if (r[f] == null) r[f] = ''; });
+    });
+    draft.scorers.forEach(function (s) { s.g = +s.g || 0; });
+    draft.fantasy.forEach(function (s) { s.p = +s.p || 0; });
+    draft.statsTable.forEach(function (s) { ['apps', 'g', 'a', 'cs', 'pts'].forEach(function (f) { s[f] = +s[f] || 0; }); });
+    // treasury: integer opening balance; positive integer amounts; sign lives in `direction`
+    if (!draft.treasury || typeof draft.treasury !== 'object') draft.treasury = { opening_balance: 0, entries: [] };
+    draft.treasury.opening_balance = Math.round(+draft.treasury.opening_balance || 0);
+    if (!Array.isArray(draft.treasury.entries)) draft.treasury.entries = [];
+    draft.treasury.entries.forEach(function (e) {
+      e.amount = Math.abs(Math.round(+e.amount || 0));
+      e.direction = e.direction === 'expense' ? 'expense' : 'income';
+      if (e.match_id === undefined) e.match_id = null;
+      if (e.note == null) e.note = '';
+    });
+  }
+  function save() {
+    normalize();
+    var overlay = {}; KEYS.forEach(function (k) { overlay[k] = clone(draft[k]); });
+    STORE.saveContent(overlay).then(function () {
+      applyOverlay(overlay);           // reflect immediately in public views
+      dirty = false;
+      var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'hidden';
+      rerenderBody();
+      msg('Saved. Changes are live on this device — use Publish to share.');
+    }).catch(function () { msg('Could not save.', true); });
+  }
+  function discard() {
+    loadDraft(); rerenderBody();
+    var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'hidden';
+    msg('Changes discarded.');
+  }
+  function revertAll() {
+    if (!window.confirm('Revert to the shipped version and clear local edits on this device?')) return;
+    STORE.resetContent().then(function () {
+      window.PSIA_DATA = JSON.parse(JSON.stringify(window.PSIA_DATA_ORIGINAL));
+      loadDraft(); rerenderBody();
+      msg('Reverted to the shipped version.');
+    });
+  }
+
+  /* read an edited field back into the draft */
+  function onInput(e) {
+    var t = e.target;
+    if (t && t.id === 'xlFile') { handleExcelFile(t); return; }
+    /* Treasury opening-balance + add-entry form (id-based, not data-k) */
+    if (t && t.id === 'txOpening') { draft.treasury.opening_balance = t.value; markDirty(); updateKasBar(); return; }
+    if (t && t.id === 'txDate') { txForm.date = t.value; return; }
+    if (t && t.id === 'txDir') { txForm.direction = t.value; var cs = TX_CATS[t.value] || []; txForm.category = cs.length ? cs[0][0] : ''; rerenderBody(); return; }
+    if (t && t.id === 'txCat') { txForm.category = t.value; return; }
+    if (t && t.id === 'txAmount') { txForm.amount = t.value; return; }
+    if (t && t.id === 'txMatch') { txForm.match_id = t.value; return; }
+    if (t && t.id === 'txNote') { txForm.note = t.value; return; }
+    /* Member saldo tab (id-based). Search updates only the list to keep focus. */
+    if (t && t.id === 'sldSearch') { saldoState.q = t.value; var lst = document.getElementById('sldList'); if (lst) lst.innerHTML = memberRowsHTML(); return; }
+    if (t && t.id === 'sldAmt') { saldoState.form.amount = t.value; return; }
+    if (t && t.id === 'sldMethod') { saldoState.form.method = t.value; return; }
+    if (t && t.id === 'sldNote') { saldoState.form.note = t.value; return; }
+    if (t && t.id === 'sldKas') { saldoState.form.toTreasury = t.checked; return; }
+    if (t && t.id === 'sldAdjAmt') { saldoState.adj.amount = t.value; return; }
+    if (t && t.id === 'sldAdjNote') { saldoState.adj.note = t.value; return; }
+    var k = t.getAttribute && t.getAttribute('data-k');
+    if (!k || !draft[k]) return;
+    var f = t.getAttribute('data-f');
+    var iAttr = t.getAttribute('data-i');
+    if (iAttr == null) { draft[k][f] = t.value; }
+    else { var i = +iAttr; if (draft[k][i]) draft[k][i][f] = t.value; }
+    markDirty();
+  }
+
+  function blankRow(k) {
+    if (k === 'results') return { id: '', date: '', opp: '', sp: 0, so: 0, r: '', venue: '', format: '', video: '', photos: '', stats: '' };
+    if (k === 'scorers') return { n: '', g: 0 };
+    if (k === 'fantasy') return { n: '', p: 0 };
+    if (k === 'statsTable') return { n: '', pos: '', apps: 0, g: 0, a: 0, cs: 0, pts: 0 };
+    return {};
+  }
+
+  function onClick(e) {
+    var t = e.target;
+    var gateBtn = t.closest && t.closest('#mngGateBtn'); if (gateBtn) { tryUnlock(); return; }
+    if (!unlocked()) return;
+    var tb = t.closest && t.closest('[data-tab]');
+    if (tb) { tab = tb.getAttribute('data-tab'); render(); return; }
+    var add = t.closest && t.closest('[data-add]');
+    if (add) { var ak = add.getAttribute('data-add'); if (ak === 'results') draft[ak].unshift(blankRow(ak)); else draft[ak].push(blankRow(ak)); markDirty(); rerenderBody(); return; }
+    var del = t.closest && t.closest('[data-del]');
+    if (del) { var dk = del.getAttribute('data-del'), di = +del.getAttribute('data-i'); draft[dk].splice(di, 1); markDirty(); rerenderBody(); return; }
+    if (t.closest && t.closest('#txAdd')) { addTxEntry(); return; }
+    var txdel = t.closest && t.closest('[data-txdel]');
+    if (txdel) {
+      var tid = txdel.getAttribute('data-txdel');
+      draft.treasury.entries = draft.treasury.entries.filter(function (e) { return e.id !== tid; });
+      markDirty(); rerenderBody(); return;
+    }
+    /* Member saldo tab */
+    var sldPick = t.closest && t.closest('[data-sld-pick]');
+    if (sldPick) {
+      saldoState.selId = sldPick.getAttribute('data-sld-pick');
+      saldoState.showLog = false; saldoState.msg = null;
+      saldoState.form = { amount: '', method: 'cash', note: '', toTreasury: true };
+      saldoState.adj = { amount: '', note: '' };
+      rerenderBody(); return;
+    }
+    if (t.closest && t.closest('#sldTopup')) { sldDoTopup(); return; }
+    if (t.closest && t.closest('#sldAdjust')) { sldDoAdjust(); return; }
+    if (t.closest && t.closest('#sldLog')) { saldoState.showLog = !saldoState.showLog; rerenderBody(); return; }
+    if (t.closest && t.closest('#mngSave')) { save(); return; }
+    if (t.closest && t.closest('#mngDiscard')) { discard(); return; }
+    if (t.closest && t.closest('#xlPick')) { var fi = document.getElementById('xlFile'); if (fi) fi.click(); return; }
+    if (t.closest && t.closest('#xlConfirm')) { confirmExcel(); return; }
+    if (t.closest && t.closest('#xlCancel')) { excelState.parsed = null; excelState.error = null; rerenderBody(); return; }
+    if (t.closest && t.closest('#nxFill')) { fillNextDate(); return; }
+    if (t.closest && t.closest('#seasonAuto')) { seasonAuto(); return; }
+    if (t.closest && t.closest('#revertAll')) { revertAll(); return; }
+    if (t.closest && t.closest('#dlData')) { normalize(); download('data.js', buildDataJs(), 'text/javascript'); msg('data.js downloaded — send it to the site maintainer.'); return; }
+    if (t.closest && t.closest('#dlJson')) { normalize(); var o = {}; KEYS.forEach(function (k) { o[k] = draft[k]; }); download('psia-content-backup.json', JSON.stringify(o, null, 2), 'application/json'); msg('Backup downloaded.'); return; }
+  }
+  function onKey(e) { if (e.key === 'Enter' && document.getElementById('mngGate')) { e.preventDefault(); tryUnlock(); } }
+
+  document.addEventListener('input', onInput);
+  document.addEventListener('change', onInput);
+  document.addEventListener('click', onClick);
+  document.addEventListener('keydown', onKey);
+
+  /* ===============================================================
+     REGISTER THE VIEW (chain PSIA_AFTER_RENDER, add to EXTRA_VIEWS)
+     =============================================================== */
+  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
+  window.PSIA_EXTRA_VIEWS.manage = function () { return '<div id="mngRoot"></div>'; };
+
+  var prevAfter = window.PSIA_AFTER_RENDER;
+  window.PSIA_AFTER_RENDER = function (view) {
+    if (typeof prevAfter === 'function') prevAfter(view);
+    if (view === 'manage') render();
+  };
+})();

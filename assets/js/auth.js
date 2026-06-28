@@ -257,4 +257,133 @@
       '</section>';
   }
 
-  /* ==================================
+  /* ============================================================
+     Actions
+     ============================================================ */
+  function msg(id, text, ok) {
+    var m = document.getElementById(id);
+    if (m) { m.textContent = text; m.className = 'reg-msg ' + (ok ? 'ok' : 'err'); }
+  }
+
+  function doSignIn() {
+    var id = (document.getElementById('siId') || {}).value || '';
+    if (!id.trim()) return msg('siMsg', 'Enter your email or phone.');
+    STORE.signIn(id).then(function (u) {
+      AUTH.user = u; paintHeader(); AUTH._emit();
+      // straight to registering — that's why people sign in
+      if (window.PSIA_APP) window.PSIA_APP.show('register');
+    }).catch(function (e) { msg('siMsg', e.message || 'Could not sign in.'); });
+  }
+
+  function doDemoSignIn() {
+    STORE.ensureDemoAccount(DEMO)
+      .then(function () { return STORE.signIn(DEMO.email); })
+      .then(function (u) {
+        AUTH.user = u; paintHeader(); AUTH._emit();
+        if (window.PSIA_APP) window.PSIA_APP.show('register');
+      })
+      .catch(function (e) { msg('siMsg', e.message || 'Could not start demo.'); });
+  }
+
+  function doSignUp() {
+    var name = (document.getElementById('suName') || {}).value || '';
+    var email = (document.getElementById('suEmail') || {}).value || '';
+    var phone = (document.getElementById('suPhone') || {}).value || '';
+    if (!name.trim()) return msg('suMsg', 'Enter your name.');
+    if (!signupPos) return msg('suMsg', 'Pick your usual position.');
+    STORE.createAccount({ name: name, position: signupPos, email: email, phone: phone })
+      .then(function (u) {
+        AUTH.user = u; paintHeader(); AUTH._emit();
+        if (window.PSIA_APP) window.PSIA_APP.show('register');
+      })
+      .catch(function (e) { msg('suMsg', e.message || 'Could not create account.'); });
+  }
+
+  function val(id) { var el = document.getElementById(id); return el ? (el.value || '') : ''; }
+
+  // msgId lets either Save button (Profile or Medical) show its own confirmation.
+  function doSaveProfile(msgId) {
+    msgId = msgId || 'pfMsg';
+    var name = val('pfName');
+    var email = val('pfEmail');
+    var phone = val('pfPhone');
+    if (!name.trim()) return msg(msgId, 'Name can\'t be empty.');
+    STORE.updateProfile({
+      name: name, position: editPos, email: email, phone: phone,
+      // medical & emergency — all optional
+      bloodType: val('pfBlood'), preferredRs: val('pfRs'),
+      allergies: val('pfAllergies'), medical: val('pfMedical'),
+      emergencyName: val('pfEmgName'), emergencyPhone: val('pfEmgPhone')
+    })
+      .then(function (u) {
+        AUTH.user = u; paintHeader(); AUTH._emit();
+        msg(msgId, '✓ Saved', true);
+        setTimeout(function () { var m = document.getElementById(msgId); if (m) m.textContent = ''; }, 2200);
+      })
+      .catch(function (e) { msg(msgId, e.message || 'Could not save.'); });
+  }
+
+  function doSignOut() {
+    STORE.signOut().then(function () {
+      AUTH.user = null; paintHeader(); AUTH._emit();
+      renderAuthForms();
+    });
+  }
+
+  /* ============================================================
+     Events (delegated, scoped to #authRoot + header acct button)
+     ============================================================ */
+  function inAuth(t) { return t && t.closest && t.closest('#authRoot'); }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!inAuth(t)) return;
+
+    // position chips (sign-up + edit)
+    var sp = t.closest('[data-au-pos]');
+    if (sp) {
+      signupPos = sp.getAttribute('data-au-pos');
+      root().querySelectorAll('[data-au-pos]').forEach(function (c) { c.classList.remove('on'); });
+      sp.classList.add('on');
+      return;
+    }
+    var ep = t.closest('[data-au-epos]');
+    if (ep) {
+      editPos = ep.getAttribute('data-au-epos');
+      root().querySelectorAll('[data-au-epos]').forEach(function (c) { c.classList.remove('on'); });
+      ep.classList.add('on');
+      return;
+    }
+
+    if (t.closest('#demoBtn')) { doDemoSignIn(); return; }
+    if (t.closest('#siBtn')) { doSignIn(); return; }
+    if (t.closest('#suBtn')) { doSignUp(); return; }
+    if (t.closest('#pfSave')) { doSaveProfile('pfMsg'); return; }
+    if (t.closest('#pfSave2')) { doSaveProfile('pfMsg2'); return; }
+    if (t.closest('#signOutBtn')) { doSignOut(); return; }
+    // #goRegister is handled by app.js router via data-view
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !inAuth(e.target)) return;
+    var id = e.target.id;
+    if (id === 'siId') { e.preventDefault(); doSignIn(); }
+    else if (id === 'suName' || id === 'suEmail' || id === 'suPhone') { e.preventDefault(); doSignUp(); }
+  });
+
+  /* ============================================================
+     Hook into the router
+     ============================================================ */
+  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
+  window.PSIA_EXTRA_VIEWS.account = function () { return '<div id="authRoot" class="sqRoot"></div>'; };
+
+  var prevAfter = window.PSIA_AFTER_RENDER;
+  window.PSIA_AFTER_RENDER = function (view) {
+    if (typeof prevAfter === 'function') prevAfter(view);
+    paintHeader();
+    if (view === 'account') renderAccount();
+  };
+
+  // initial header paint once DOM is ready
+  paintHeader();
+})();

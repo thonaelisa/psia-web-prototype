@@ -308,4 +308,61 @@
     STORE.markUnpaid(id).then(function () { state.msg = { text: 'Set back to unpaid — any saldo payment was refunded.', ok: true }; loadRegs(render); });
   }
   function clearClaim(id) {
-    STORE.clearClaim(id).then(fun
+    STORE.clearClaim(id).then(function () { loadRegs(render); });
+  }
+  function payFromSaldoAction(id) {
+    var amt = amtFor(id);
+    STORE.payFromSaldo(id, amt).then(function () {
+      state.msg = { text: 'Confirmed from saldo · ' + rp(amt) + '.', ok: true };
+      loadRegs(render);
+    }).catch(function (e) { state.msg = { text: e.message || 'Could not pay from saldo.', ok: false }; render(); });
+  }
+
+  /* ===============================================================
+     EVENTS (delegated, scoped to #payRoot)
+     =============================================================== */
+  function within(t) { return t && t.closest && t.closest('#payRoot'); }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!within(t)) return;
+    if (t.closest('#payGateBtn')) { tryUnlock(); return; }
+    if (!unlocked()) return;
+    if (t.closest('#payReload')) { state.msg = null; loadRegs(render); return; }
+    if (t.closest('#payLock')) { setUnlocked(false); render(); return; }
+    var ps = t.closest('[data-pay-saldo]'); if (ps) { payFromSaldoAction(ps.getAttribute('data-pay-saldo')); return; }
+    var c = t.closest('[data-pay-confirm]'); if (c) { confirmPay(c.getAttribute('data-pay-confirm')); return; }
+    var u = t.closest('[data-pay-unpaid]'); if (u) { markUnpaid(u.getAttribute('data-pay-unpaid')); return; }
+    var cc = t.closest('[data-pay-clearclaim]'); if (cc) { clearClaim(cc.getAttribute('data-pay-clearclaim')); return; }
+    // data-view links (Manage / Team board) are handled by app.js
+  });
+  document.addEventListener('change', function (e) {
+    var t = e.target;
+    if (!within(t)) return;
+    if (t.id === 'paySel') {
+      state.selected = parseInt(t.value, 10) || 0;
+      state.msg = null; state.regs = []; state.loading = true;
+      render(); loadRegs(render);
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && document.getElementById('payGate') && within(e.target)) { e.preventDefault(); tryUnlock(); }
+  });
+
+  /* ===============================================================
+     REGISTER THE VIEW
+     =============================================================== */
+  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
+  window.PSIA_EXTRA_VIEWS.payments = function () { return '<div id="payRoot"></div>'; };
+
+  var prevAfter = window.PSIA_AFTER_RENDER;
+  window.PSIA_AFTER_RENDER = function (view) {
+    if (typeof prevAfter === 'function') prevAfter(view);
+    if (view !== 'payments') return;
+    state.msg = null;
+    if (!unlocked()) { render(); return; }
+    state.regs = []; state.loading = true;
+    render();              // paint with "Loading…"
+    loadRegs(render);      // then fill the list
+  };
+})();

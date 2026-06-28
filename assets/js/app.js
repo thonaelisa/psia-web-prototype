@@ -569,4 +569,50 @@
   function show(v, scroll){
     document.getElementById('app').innerHTML = (VIEWS[v]||viewHome)();
     afterRender(v); setActive(v);
-    if(scroll){ const el=document.getE
+    if(scroll){ const el=document.getElementById(scroll); if(el) setTimeout(()=>el.scrollIntoView({behavior:'smooth'}),30); }
+    else window.scrollTo({top:0,behavior:'auto'});
+  }
+  function openMatch(id){
+    const m = D.results.find(r=>r.id===id);
+    if(!m) return show('matches');
+    document.getElementById('app').innerHTML = viewMatch(m);
+    afterRender('match'); setActive('matches');
+    window.scrollTo({top:0,behavior:'auto'});
+  }
+
+  document.addEventListener('click', e=>{
+    /* stats view-mode toggle — re-render only the panel, keep scroll position */
+    const modeEl = e.target.closest('[data-statmode]');
+    if(modeEl){
+      statsMode = modeEl.dataset.statmode;
+      const wrap = document.getElementById('statsWrap');
+      if(wrap) wrap.innerHTML = statsPanelHTML();
+      return;
+    }
+    /* sortable stats header (compact mode) — re-render only the panel */
+    const sortEl = e.target.closest('[data-sort]');
+    if(sortEl){
+      const k = sortEl.dataset.sort;
+      if(statSort.key === k){ statSort.dir = statSort.dir==='asc' ? 'desc' : 'asc'; }
+      else { statSort = { key:k, dir: k==='n' ? 'asc' : 'desc' }; }
+      const wrap = document.getElementById('statsWrap');
+      if(wrap) wrap.innerHTML = statsPanelHTML();
+      return;
+    }
+    const match = e.target.closest('[data-match]');
+    if(match){ e.preventDefault(); openMatch(match.dataset.match); return; }
+    const a = e.target.closest('[data-view],[data-scroll]');
+    if(a){
+      e.preventDefault();
+      if(a.dataset.scroll && !a.dataset.view) show('home', a.dataset.scroll);
+      else show(a.dataset.view, a.dataset.scroll);
+    }
+  });
+  const mt = document.getElementById('mtoggle');
+  if(mt) mt.addEventListener('click', ()=>{ const m=document.getElementById('mobnav'); m.style.display = m.style.display==='flex'?'none':'flex'; });
+
+  /* expose the router so other modules can navigate */
+  window.PSIA_APP = { show, openMatch };
+
+  show('home');
+})();

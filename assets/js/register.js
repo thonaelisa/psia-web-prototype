@@ -484,4 +484,118 @@
     if (!document.getElementById('mtSS')) return;
     tickCountdown();
     cdTimer = setInterval(function () {
-      if (!document.getElementById('mtSS')) { clearInterval(cdTimer); cdTimer = null; return
+      if (!document.getElementById('mtSS')) { clearInterval(cdTimer); cdTimer = null; return; }
+      tickCountdown();
+    }, 1000);
+  }
+
+  /* ============================================================
+     Actions
+     ============================================================ */
+  function selectMatch(i) {
+    if (i === state.selected) return;
+    state.selected = i;
+    state.pos = null;
+    state.msg = null;
+    state.regs = [];
+    render();                 // immediate repaint (squad shows "Loading…")
+    loadRegs(render);         // then fill the squad + live fill
+  }
+
+  function pickPos(p) {
+    state.pos = p;
+    // repaint only the call-up body to keep the squad scroll position
+    var host = document.querySelector('#matchRoot .mt-grid > div:first-child > div:last-child');
+    // simplest robust path: re-render the whole call-up card
+    render();
+  }
+
+  function submit() {
+    var fx = selFx();
+    var u = state.user;
+    if (!u) { state.msg = { text: 'Please sign in first.', ok: false }; render(); return; }
+    var note = (document.getElementById('mtNote') || {}).value || '';
+    var pos = state.pos || u.position;
+    if (!pos) { state.msg = { text: 'Pick a position.', ok: false }; render(); return; }
+    STORE.register({ matchId: matchIdFor(fx), name: u.name, position: pos, note: note, accountId: u.id })
+      .then(function () {
+        state.msg = { text: '✓ You\'re on the list for ' + fx.opp + ' (' + pos + ').', ok: true };
+        loadRegs(render);
+      })
+      .catch(function (e) {
+        state.msg = { text: e.message || 'Could not register.', ok: false };
+        render();
+      });
+  }
+
+  function claimPay() {
+    var mine = myReg(); if (!mine) return;
+    STORE.claimPayment(mine.id, 'manual').then(function () {
+      state.msg = { text: 'Payment claim sent — the committee will confirm it.', ok: true };
+      loadRegs(render);
+    });
+  }
+  function claimSaldo() {
+    var mine = myReg(); if (!mine) return;
+    STORE.claimPayment(mine.id, 'saldo').then(function () {
+      state.msg = { text: 'Saldo payment requested — the committee will confirm and deduct it.', ok: true };
+      loadRegs(render);
+    });
+  }
+  function unclaimPay() {
+    var mine = myReg(); if (!mine) return;
+    STORE.clearClaim(mine.id).then(function () { loadRegs(render); });
+  }
+
+  /* ============================================================
+     Events (delegated, scoped to #matchRoot)
+     ============================================================ */
+  function within(t) { return t && t.closest && t.closest('#matchRoot'); }
+
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!within(t)) return;
+    var sel = t.closest('[data-mt-select]');
+    if (sel) { selectMatch(parseInt(sel.getAttribute('data-mt-select'), 10) || 0); return; }
+    var pos = t.closest('[data-mt-pos]');
+    if (pos) { pickPos(pos.getAttribute('data-mt-pos')); return; }
+    if (t.closest('[data-mt-submit]')) { submit(); return; }
+    if (t.closest('[data-mt-claim-saldo]')) { claimSaldo(); return; }
+    if (t.closest('[data-mt-claim]')) { claimPay(); return; }
+    if (t.closest('[data-mt-unclaim]')) { unclaimPay(); return; }
+    // data-view (sign in / edit profile) + data-match (report) handled by app.js
+  });
+
+  // Enter inside the note submits
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !within(e.target)) return;
+    if (e.target.id === 'mtNote') { e.preventDefault(); submit(); }
+  });
+
+  /* ============================================================
+     Hook into the router (overrides squad.js's plain `register` view)
+     ============================================================ */
+  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
+  window.PSIA_EXTRA_VIEWS.register = function () { return '<div id="matchRoot"></div>'; };
+
+  var prevAfter = window.PSIA_AFTER_RENDER;
+  window.PSIA_AFTER_RENDER = function (view) {
+    if (typeof prevAfter === 'function') prevAfter(view);
+    if (view !== 'register') {
+      if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
+      return;
+    }
+    // fresh enter: reset transient state, load session + squad, then paint
+    state.pos = null;
+    state.msg = null;
+    state.regs = [];
+    state.loadingRegs = true;
+    var AUTH = window.PSIA_AUTH;
+    (AUTH ? AUTH.refresh() : Promise.resolve(null)).then(function (user) {
+      if (!root()) return;            // navigated away while loading
+      state.user = user || null;
+      render();                       // paint with "Loading…" squad
+      loadRegs(render);               // fill squad
+    });
+  };
+})();

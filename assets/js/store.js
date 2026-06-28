@@ -358,4 +358,228 @@
     }) || null;
   };
 
-  LocalBackend.prototype.createAcco
+  LocalBackend.prototype.createAccount = function (profile) {
+    var list = this._readAccounts();
+    var email = (profile.email || '').trim();
+    var phone = (profile.phone || '').trim();
+    // an email or phone is the sign-in handle, so we need at least one and it must be unique
+    if (!email && !phone) return Promise.reject(new Error('Add an email or phone so you can sign in.'));
+    if (email && this._findByIdentifier(list, email)) return Promise.reject(new Error('An account with that email already exists — sign in instead.'));
+    if (phone && this._findByIdentifier(list, phone)) return Promise.reject(new Error('An account with that phone already exists — sign in instead.'));
+    var acct = {
+      id: 'u_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
+      name: profile.name.trim(),
+      position: profile.position,
+      email: email,
+      phone: phone,
+      saldo: 0,
+      saldoLog: [],
+      createdAt: Date.now()
+    };
+    list.push(acct);
+    this._writeAccounts(list);
+    // >>> BACKEND: set the session token your auth provider returns.
+    try { localStorage.setItem(this.SESS_KEY, acct.id); } catch (e) {}
+    return resolve(acct);
+  };
+  /* Seed an account WITHOUT signing in (used for the demo login). No-op if
+     an account with the same email/phone already exists. */
+  LocalBackend.prototype.ensureAccount = function (profile) {
+    var list = this._readAccounts();
+    var found = this._findByIdentifier(list, profile.email) || this._findByIdentifier(list, profile.phone);
+    if (found) return resolve(found);
+    var acct = {
+      id: 'u_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
+      name: profile.name.trim(),
+      position: profile.position,
+      email: (profile.email || '').trim(),
+      phone: (profile.phone || '').trim(),
+      saldo: 0,
+      saldoLog: [],
+      createdAt: Date.now()
+    };
+    list.push(acct);
+    this._writeAccounts(list);
+    return resolve(acct);
+  };
+  LocalBackend.prototype.signIn = function (identifier) {
+    var list = this._readAccounts();
+    var acct = this._findByIdentifier(list, identifier);
+    if (!acct) return Promise.reject(new Error('No account found for that email or phone.'));
+    // >>> BACKEND: here you'd verify a password / OTP before issuing a session.
+    try { localStorage.setItem(this.SESS_KEY, acct.id); } catch (e) {}
+    return resolve(acct);
+  };
+  LocalBackend.prototype.signOut = function () {
+    // >>> BACKEND: revoke the session token.
+    try { localStorage.removeItem(this.SESS_KEY); } catch (e) {}
+    return resolve(true);
+  };
+  LocalBackend.prototype.currentUser = function () {
+    var id;
+    try { id = localStorage.getItem(this.SESS_KEY); } catch (e) { id = null; }
+    if (!id) return resolve(null);
+    var acct = this._readAccounts().find(function (a) { return a.id === id; });
+    if (acct) ensureSaldo(acct);
+    return resolve(acct || null);
+  };
+  LocalBackend.prototype.updateAccount = function (patch) {
+    var sid;
+    try { sid = localStorage.getItem(this.SESS_KEY); } catch (e) { sid = null; }
+    if (!sid) return Promise.reject(new Error('Not signed in.'));
+    var list = this._readAccounts();
+    var acct = list.find(function (a) { return a.id === sid; });
+    if (!acct) return Promise.reject(new Error('Account not found.'));
+    // guard uniqueness if email/phone is being changed
+    var newEmail = patch.email != null ? patch.email.trim() : acct.email;
+    var newPhone = patch.phone != null ? patch.phone.trim() : acct.phone;
+    if (!newEmail && !newPhone) return Promise.reject(new Error('Keep at least an email or phone.'));
+    var self = this;
+    var clash = list.find(function (a) {
+      if (a.id === acct.id) return false;
+      if (newEmail && self._normId(a.email) === self._normId(newEmail)) return true;
+      if (newPhone && String(a.phone).replace(/[^\d]/g, '') && String(a.phone).replace(/[^\d]/g, '') === String(newPhone).replace(/[^\d]/g, '')) return true;
+      return false;
+    });
+    if (clash) return Promise.reject(new Error('Another account already uses that email or phone.'));
+    if (patch.name != null) acct.name = patch.name.trim();
+    if (patch.position != null) acct.position = patch.position;
+    acct.email = newEmail;
+    acct.phone = newPhone;
+    // optional medical & emergency details (trimmed; empty string clears the field)
+    ['bloodType', 'preferredRs', 'allergies', 'medical', 'emergencyName', 'emergencyPhone'].forEach(function (k) {
+      if (patch[k] != null) acct[k] = String(patch[k]).trim();
+    });
+    this._writeAccounts(list);
+    return resolve(acct);
+  };
+
+  /* ============================================================
+     PSIA_STORE — the public facade used by every view
+     ============================================================ */
+  var Store = {
+    POSITIONS: POSITIONS,
+    POSITION_LABEL: POSITION_LABEL,
+    _backend: new LocalBackend(),
+
+    // --- registrations -------------------------------------------------
+    getRegistrations: function (matchId) {
+      return this._backend.listRegistrations(matchId);
+    },
+    register: function (data) {
+      if (!data || !data.name || !data.name.trim()) {
+        return Promise.reject(new Error('Name is required'));
+      }
+      if (POSITIONS.indexOf(data.position) === -1) {
+        return Promise.reject(new Error('Pick a position: ' + POSITIONS.join(', ')));
+      }
+      return this._backend.addRegistration({
+        matchId: data.matchId, name: data.name, position: data.position,
+        note: data.note, accountId: data.accountId
+      });
+    },
+    unregister: function (id) { return this._backend.removeRegistration(id); },
+
+    // --- payments (stored on each registration) ------------------------
+    // Flow: unpaid → claimPayment (player) → confirmPayment (admin) = paid.
+    setPayment: function (id, patch) { return this._backend.setPayment(id, patch || {}); },
+    // method: 'saldo' = player wants it taken from their wallet; else cash/transfer ('manual').
+    claimPayment: function (id, method) { return this._backend.setPayment(id, { payStatus: 'claimed', payClaimedAt: Date.now(), payMethod: method || 'manual' }); },
+    clearClaim: function (id) { return this._backend.setPayment(id, { payStatus: 'unpaid', payClaimedAt: null, payMethod: null }); },
+    confirmPayment: function (id, amount, method) { return this._backend.setPayment(id, { payStatus: 'paid', payAmount: amount, payConfirmedAt: Date.now(), payMethod: method || 'manual' }); },
+    markUnpaid: function (id) { return this._backend.voidPayment(id); },   // refunds saldo if it was a saldo payment
+
+    // --- saldo (prepaid wallet on the member account) ------------------
+    getAccount: function (id) { return this._backend.getAccount(id); },
+    getAccounts: function () { return this._backend.listAccounts(); },
+    // Top up a player's balance. opts: { amount, method:'cash'|'transfer', note, toTreasury:true }
+    topUpSaldo: function (id, opts) {
+      var self = this; opts = opts || {};
+      return this._backend.topUpSaldo(id, opts).then(function (acct) {
+        if (opts.toTreasury === false) return acct;
+        return self._backend.addTreasuryEntry(saldoTxEntry(acct, opts)).then(function () { return acct; });
+      });
+    },
+    adjustSaldo: function (id, delta, note) { return this._backend.adjustSaldo(id, delta, note); },
+    // Settle a registration's fee straight from the player's saldo (admin).
+    payFromSaldo: function (regId, amount) { return this._backend.payFromSaldo(regId, amount); },
+    voidPayment: function (regId) { return this._backend.voidPayment(regId); },
+
+    // --- lineup --------------------------------------------------------
+    getLineup: function (matchId) { return this._backend.getLineup(matchId); },
+    saveLineup: function (matchId, lineup) { return this._backend.saveLineup(matchId, lineup); },
+
+    // --- content overlay (admin "Manage" page) -------------------------
+    CONTENT_KEYS: ['next', 'season', 'results', 'scorers', 'fantasy', 'statsTable', 'treasury'],
+    getContentSync: function () { return this._backend.getContentSync(); },
+    getContent: function () { return this._backend.getContent(); },
+    saveContent: function (overlay) { return this._backend.saveContent(overlay); },
+    resetContent: function () { return this._backend.resetContent(); },
+
+    // --- accounts / session -------------------------------------------
+    createAccount: function (profile) {
+      if (!profile || !profile.name || !profile.name.trim()) {
+        return Promise.reject(new Error('Enter your name.'));
+      }
+      if (POSITIONS.indexOf(profile.position) === -1) {
+        return Promise.reject(new Error('Pick your usual position.'));
+      }
+      return this._backend.createAccount(profile);
+    },
+    signIn: function (identifier) {
+      if (!identifier || !identifier.trim()) return Promise.reject(new Error('Enter your email or phone.'));
+      return this._backend.signIn(identifier);
+    },
+    signOut: function () { return this._backend.signOut(); },
+    currentUser: function () { return this._backend.currentUser(); },
+    ensureDemoAccount: function (profile) { return this._backend.ensureAccount(profile); },
+    updateProfile: function (patch) { return this._backend.updateAccount(patch || {}); },
+
+    // --- demo helpers (no backend yet) --------------------------------
+    seedDemo: function (matchId) {
+      var pool = (window.PSIA_DATA && window.PSIA_DATA.statsTable) || [];
+      var rows = pool
+        .filter(function (p) { return p.n && p.n.trim(); })
+        .slice(0, 20)
+        .map(function (p) {
+          return {
+            id: uid(), matchId: matchId, name: p.n.trim(),
+            position: normalizePos(p.pos), note: '', ts: Date.now() + Math.random(),
+            payStatus: 'unpaid', payAmount: null, payClaimedAt: null, payConfirmedAt: null
+          };
+        });
+      // guarantee at least one keeper for a sensible demo
+      if (!rows.some(function (r) { return r.position === 'GK'; }) && rows.length) {
+        rows[0].position = 'GK';
+      }
+      // demo: a realistic mix of paid / claimed / unpaid so the Payments page
+      // isn't blank when a volunteer first opens it (real data overwrites this).
+      var fee = parseInt(String((window.PSIA_DATA && window.PSIA_DATA.next && window.PSIA_DATA.next.fee) || '').replace(/[^\d]/g, ''), 10) || 0;
+      rows.forEach(function (r, i) {
+        if (i % 3 === 0) { r.payStatus = 'paid'; r.payAmount = fee || null; r.payConfirmedAt = Date.now(); }
+        else if (i % 4 === 1) { r.payStatus = 'claimed'; r.payClaimedAt = Date.now(); }
+      });
+      return this._backend.replaceRegistrations(matchId, rows);
+    },
+
+    // --- export / import (handy even with a backend) ------------------
+    exportMatch: function (matchId) {
+      var self = this;
+      return Promise.all([this.getRegistrations(matchId), this.getLineup(matchId)])
+        .then(function (res) {
+          return { matchId: matchId, registrations: res[0], lineup: res[1], exportedAt: Date.now() };
+        });
+    },
+    importMatch: function (payload) {
+      var self = this;
+      if (!payload || !payload.matchId) return Promise.reject(new Error('Invalid payload'));
+      var p = this._backend.replaceRegistrations(payload.matchId, payload.registrations || []);
+      if (payload.lineup) {
+        p = p.then(function () { return self.saveLineup(payload.matchId, payload.lineup); });
+      }
+      return p;
+    }
+  };
+
+  window.PSIA_STORE = Store;
+})();

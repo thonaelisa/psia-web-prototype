@@ -731,4 +731,8 @@
 
   var prevAfter = window.PSIA_AFTER_RENDER;
   window.PSIA_AFTER_RENDER = function (view) {
-    if (typeof prevAfter === 'fun
+    if (typeof prevAfter === 'function') prevAfter(view);
+    if (view === 'register') renderRegister();
+    else if (view === 'admin') renderAdmin();
+  };
+})();
