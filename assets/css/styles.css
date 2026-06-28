@@ -183,6 +183,24 @@ img{display:block;max-width:100%}
 .lrow .val{font-family:var(--mono);font-weight:700;color:var(--blue-light)}
 .lrow .val.gold{color:var(--gold)}
 
+/* ---------- treasury (kas) card — home ---------- */
+.kas{background:var(--card);border:1px solid var(--border);border-radius:var(--r-card-lg);overflow:hidden}
+.kas-main{padding:26px 28px}
+.kas-cap{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-2)}
+.kas-bal{font-weight:700;font-size:46px;line-height:1;color:var(--gold);margin-top:12px}
+.kas-sub{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--border)}
+.kas-cell{padding:20px 28px;border-right:1px solid var(--border)}
+.kas-cell:last-child{border-right:none}
+.kas-tick{width:30px;height:3px;border-radius:99px;margin-bottom:12px}
+.kas-num{font-weight:700;font-size:24px;line-height:1}
+.kas-label{font-size:12.5px;color:var(--muted-2);margin-top:7px;font-weight:500}
+@media(max-width:560px){
+  .kas-bal{font-size:36px}
+  .kas-sub{grid-template-columns:1fr}
+  .kas-cell{border-right:none}
+  .kas-cell:first-child{border-bottom:1px solid var(--border)}
+}
+
 /* ---------- fixtures list (matches page) ---------- */
 .fxrow{display:flex;align-items:center;gap:18px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:12px;padding:16px 20px}
 .fxrow.win{border-left-color:var(--win)} .fxrow.draw{border-left-color:var(--draw)} .fxrow.loss{border-left-color:var(--loss)}
@@ -697,6 +715,28 @@ table.data.sortable th .sortcaret{margin-left:5px;font-size:8px;vertical-align:m
 
 .mng-toolrow{max-width:var(--wrap);margin:0 auto 18px;display:flex;justify-content:flex-end}
 
+/* Treasury (kas) panel */
+.mng-kasbar{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:22px}
+.mng-kascell{background:var(--panel);border:1px solid var(--border-2);border-radius:12px;padding:14px 16px}
+.mng-kascell .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-2)}
+.mng-kascell .v{font-family:var(--mono);font-weight:700;font-size:22px;margin-top:6px;color:var(--text)}
+.mng-kascell .v.gold{color:var(--gold)} .mng-kascell .v.win{color:var(--win)} .mng-kascell .v.loss{color:var(--loss)}
+.mng-tform{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.mng-tform .mng-tnote{grid-column:1/-1}
+.mng-trow{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--border-2);flex-wrap:wrap}
+.mng-trow:last-child{border-bottom:none}
+.mng-trow .t-date{font-size:12px;color:var(--muted-2);width:64px;flex:none}
+.mng-trow .t-cat{font-size:13px;font-weight:600;width:120px;flex:none}
+.mng-trow .t-amt{font-weight:700;width:130px;flex:none;text-align:right}
+.mng-trow .t-amt.win{color:var(--win)} .mng-trow .t-amt.loss{color:var(--loss)}
+.mng-trow .t-note{font-size:13px;color:var(--muted);flex:1;min-width:120px}
+.mng-trow .mng-del{margin-left:auto}
+@media(max-width:760px){
+  .mng-kasbar{grid-template-columns:1fr}
+  .mng-tform{grid-template-columns:1fr}
+  .mng-trow .t-amt{text-align:left}
+}
+
 /* ============================================================
    MATCHES PAGE — next-fixture spotlight, upcoming list, results
    (markup lives in app.js: viewMatches / nextSpotlight / upcomingSection)
@@ -775,50 +815,4 @@ table.data.sortable th .sortcaret{margin-left:5px;font-size:8px;vertical-align:m
 /* ---- 03 all results table ---- */
 .shead.rec{justify-content:space-between;gap:16px;flex-wrap:wrap}
 .shead-tag{display:flex;align-items:center}
-.rec-line{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--muted-2)}
-.rec-line .lab{color:var(--dim)}
-.rec-line .w{font-weight:700;color:var(--win)}
-.rec-line .d{font-weight:700;color:var(--gold-2)}
-.rec-line .l{font-weight:700;color:var(--loss)}
-.rec-line .s{color:var(--divider)}
-
-.restable{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--card)}
-.rt-head{display:grid;grid-template-columns:18px 86px 1fr auto 150px;align-items:center;gap:18px;
-  padding:13px 24px;background:var(--panel);border-bottom:1px solid var(--border);
-  font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim)}
-.rt-head .r{text-align:right}
-.rt-row{display:grid;grid-template-columns:18px 86px 1fr auto 150px;align-items:center;gap:18px;
-  padding:17px 24px;border-bottom:1px solid #1F2A41;transition:.15s}
-.rt-row:last-child{border-bottom:none}
-.rt-row.lk:hover{background:#13203A}
-.rt-dot{width:9px;height:9px;border-radius:50%}
-.rt-dot.win{background:var(--win);box-shadow:0 0 0 3px rgba(54,210,123,.16)}
-.rt-dot.draw{background:var(--draw);box-shadow:0 0 0 3px rgba(224,181,40,.16)}
-.rt-dot.loss{background:var(--loss);box-shadow:0 0 0 3px rgba(240,88,75,.16)}
-.rt-date{font-family:var(--mono);font-size:11.5px;color:var(--muted-2)}
-.rt-fix{font-weight:800;font-size:16.5px}
-.rt-fix .v{color:var(--dim);font-style:italic;font-size:13px;font-weight:600}
-.rt-score{display:flex;align-items:center;gap:12px;justify-content:flex-end}
-.rt-sc{font-weight:900;font-size:23px;letter-spacing:.01em}
-.rt-score .rbadge{width:52px;text-align:center;padding:3px 8px}
-.rt-report{font-family:var(--mono);font-size:11.5px;font-weight:700;color:var(--dim);text-align:right;white-space:nowrap;transition:.15s}
-.rt-row.lk:hover .rt-report{color:var(--text)}
-
-/* ---- matches page responsive ---- */
-@media(max-width:860px){
-  .hero-matches .hero-h1{font-size:46px !important}
-  .spot-cta{flex-direction:column;align-items:stretch}
-  .upc-row{grid-template-columns:88px 1fr;row-gap:14px}
-  .upc-prog{grid-column:1 / -1}
-  .upc-row > .upc-reg{grid-column:1 / -1}
-  .rt-head{display:none}
-  .rt-row{grid-template-columns:14px 66px 1fr;row-gap:6px}
-  .rt-fix{font-size:15px}
-  .rt-score{grid-column:2 / -1;justify-content:flex-start}
-  .rt-report{display:none}
-}
-@media(max-width:560px){
-  .hero-matches .hero-h1{font-size:38px !important}
-  .spot-matchup{gap:16px}
-  .spot-team{font-size:30px}
-}
+.rec-line{display:flex;align-items:center;gap:8px;font-family:va

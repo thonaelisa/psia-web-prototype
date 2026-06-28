@@ -295,7 +295,9 @@
       '<div class="page-head"><h1>Team selection</h1>' +
       '<p>Pick a formation, then drag registered players onto the pitch. Click any ' +
       'position to set up to three backups.</p>' +
-      '<div style="margin-top:14px"><span class="lk backlink" data-view="manage">← Back to Manage</span></div></div>' +
+      '<div style="margin-top:14px;display:flex;gap:20px;flex-wrap:wrap">' +
+        '<span class="lk backlink" data-view="manage">← Back to Manage</span>' +
+        '<span class="lk backlink" data-view="payments">Payments →</span></div></div>' +
       '<div id="boardWrap"></div>';
     // load saved lineup (or start fresh) + registrants together
     Promise.all([STORE.getRegistrations(matchId()), STORE.getLineup(matchId())])
@@ -729,8 +731,4 @@
 
   var prevAfter = window.PSIA_AFTER_RENDER;
   window.PSIA_AFTER_RENDER = function (view) {
-    if (typeof prevAfter === 'function') prevAfter(view);
-    if (view === 'register') renderRegister();
-    else if (view === 'admin') renderAdmin();
-  };
-})();
+    if (typeof prevAfter === 'fun

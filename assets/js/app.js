@@ -4,6 +4,26 @@
   const D = window.PSIA_DATA;
   const RMAP = { win:'WIN', draw:'DRAW', loss:'LOSS' };
 
+  /* ---- treasury (kas) helpers ---- */
+  /* Format integer IDR as "Rp 1,500,000" (thousands separators, no decimals). */
+  function fmtIDR(n){
+    const v = Math.round(Number(n)||0);
+    return (v<0?'-':'') + 'Rp ' + Math.abs(v).toLocaleString('en-US');
+  }
+  /* Kas balance = opening_balance + Σincome − Σexpense (amounts are positive). */
+  function treasuryTotals(){
+    const t = (D && D.treasury) || {};
+    const opening = Math.round(Number(t.opening_balance)||0);
+    const entries = Array.isArray(t.entries) ? t.entries : [];
+    let income = 0, expense = 0;
+    entries.forEach(e=>{
+      const amt = Math.abs(Math.round(Number(e.amount)||0));
+      if(e.direction==='income') income += amt;
+      else if(e.direction==='expense') expense += amt;
+    });
+    return { balance: opening+income-expense, income, expense, opening, count: entries.length };
+  }
+
   /* current sort state for the Stats table (default: Pts, high→low) */
   let statSort = { key:'pts', dir:'desc' };
 
@@ -131,6 +151,26 @@
     </section>`;
   }
 
+  /* ---- treasury (kas) card — home, read-only headline figures ---- */
+  function treasuryCard(){
+    const t = treasuryTotals();
+    if(t.count===0 && t.opening===0) return '';   // empty → hide the card
+    return `<section class="sec">
+      ${shead('05','Treasury')}
+      <div class="kas">
+        <div class="accent-strip"></div>
+        <div class="kas-main">
+          <div class="kas-cap">Current kas balance</div>
+          <div class="kas-bal mono">${fmtIDR(t.balance)}</div>
+        </div>
+        <div class="kas-sub">
+          <div class="kas-cell"><div class="kas-tick" style="background:var(--win)"></div><div class="kas-num mono" style="color:var(--win)">${fmtIDR(t.income)}</div><div class="kas-label">In · this season</div></div>
+          <div class="kas-cell"><div class="kas-tick" style="background:var(--loss)"></div><div class="kas-num mono" style="color:var(--loss)">${fmtIDR(t.expense)}</div><div class="kas-label">Out · this season</div></div>
+        </div>
+      </div>
+    </section>`;
+  }
+
   /* ---- VIEWS ---- */
   function viewHome(){
     const s = D.season;
@@ -167,6 +207,8 @@
         </div>
       </div>
     </section>
+
+    ${treasuryCard()}
 
     <section class="sec last">
       <div class="join" id="join"><div class="glow"></div>
@@ -527,50 +569,4 @@
   function show(v, scroll){
     document.getElementById('app').innerHTML = (VIEWS[v]||viewHome)();
     afterRender(v); setActive(v);
-    if(scroll){ const el=document.getElementById(scroll); if(el) setTimeout(()=>el.scrollIntoView({behavior:'smooth'}),30); }
-    else window.scrollTo({top:0,behavior:'auto'});
-  }
-  function openMatch(id){
-    const m = D.results.find(r=>r.id===id);
-    if(!m) return show('matches');
-    document.getElementById('app').innerHTML = viewMatch(m);
-    afterRender('match'); setActive('matches');
-    window.scrollTo({top:0,behavior:'auto'});
-  }
-
-  document.addEventListener('click', e=>{
-    /* stats view-mode toggle — re-render only the panel, keep scroll position */
-    const modeEl = e.target.closest('[data-statmode]');
-    if(modeEl){
-      statsMode = modeEl.dataset.statmode;
-      const wrap = document.getElementById('statsWrap');
-      if(wrap) wrap.innerHTML = statsPanelHTML();
-      return;
-    }
-    /* sortable stats header (compact mode) — re-render only the panel */
-    const sortEl = e.target.closest('[data-sort]');
-    if(sortEl){
-      const k = sortEl.dataset.sort;
-      if(statSort.key === k){ statSort.dir = statSort.dir==='asc' ? 'desc' : 'asc'; }
-      else { statSort = { key:k, dir: k==='n' ? 'asc' : 'desc' }; }
-      const wrap = document.getElementById('statsWrap');
-      if(wrap) wrap.innerHTML = statsPanelHTML();
-      return;
-    }
-    const match = e.target.closest('[data-match]');
-    if(match){ e.preventDefault(); openMatch(match.dataset.match); return; }
-    const a = e.target.closest('[data-view],[data-scroll]');
-    if(a){
-      e.preventDefault();
-      if(a.dataset.scroll && !a.dataset.view) show('home', a.dataset.scroll);
-      else show(a.dataset.view, a.dataset.scroll);
-    }
-  });
-  const mt = document.getElementById('mtoggle');
-  if(mt) mt.addEventListener('click', ()=>{ const m=document.getElementById('mobnav'); m.style.display = m.style.display==='flex'?'none':'flex'; });
-
-  /* expose the router so other modules can navigate */
-  window.PSIA_APP = { show, openMatch };
-
-  show('home');
-})();
+    if(scroll){ const el=document.getE

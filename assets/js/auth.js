@@ -32,6 +32,35 @@
     return parts[0] + ' ' + parts[parts.length - 1][0] + '.';
   }
   function root() { return document.getElementById('authRoot'); }
+  function rpA(n) { var v = Math.round(+n || 0); return 'Rp ' + Math.abs(v).toLocaleString('en-US'); }
+  function dShort(ms) { if (!ms) return ''; try { return new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }); } catch (e) { return ''; } }
+  var SREASON = { topup: 'Top-up', fee: 'Match fee', refund: 'Refund', adjust: 'Adjustment' };
+
+  /* Read-only saldo (prepaid wallet) panel for the signed-in player. Top-ups
+     are committee-only; players just see their balance + recent history. */
+  function saldoSectionHTML(u) {
+    var bal = (typeof u.saldo === 'number') ? u.saldo : (+u.saldo || 0);
+    var log = (u.saldoLog || []).slice().sort(function (a, b) { return b.ts - a.ts; }).slice(0, 8);
+    var rows = log.length ? log.map(function (e) {
+      var pos = e.delta >= 0;
+      return '<div style="display:flex;gap:10px;align-items:center;padding:9px 0;border-top:1px solid #1F2A41;font-size:13px">' +
+        '<span class="mono" style="color:#5E6A82;width:54px">' + dShort(e.ts) + '</span>' +
+        '<span style="flex:1">' + (SREASON[e.reason] || e.reason) + (e.note ? ' · ' + escapeHtml(e.note) : '') + '</span>' +
+        '<span class="mono" style="color:' + (pos ? '#36D27B' : '#F0584B') + ';white-space:nowrap">' + (pos ? '+' : '−') + rpA(Math.abs(e.delta)) + '</span>' +
+      '</div>';
+    }).join('') : '<p class="muted-sm" style="margin:10px 0 0">No top-ups yet. The committee can add saldo for you.</p>';
+    return '<section class="sec">' +
+      '<div class="shead"><span class="num">03</span><span class="lbl">Your saldo</span></div>' +
+      '<div class="reg-form" style="max-width:560px">' +
+        '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">' +
+          '<div style="font-size:30px;font-weight:800;color:' + (bal > 0 ? '#36D27B' : (bal < 0 ? '#F0584B' : '#EEF3FB')) + '">' + rpA(bal) + '</div>' +
+          '<div class="muted-sm">prepaid balance · used to cover match fees</div>' +
+        '</div>' +
+        '<p class="muted-sm" style="margin:8px 0 0">Top-ups are handled by the committee. When you\'re called up, they can settle your match fee straight from this balance.</p>' +
+        '<div style="margin-top:12px">' + rows + '</div>' +
+      '</div>' +
+    '</section>';
+  }
 
   /* A ready-made account so you can explore every page without signing up.
      Seeded on load (no auto-session); the "Sign in as demo" button logs in. */
@@ -150,6 +179,43 @@
       '</section>';
   }
 
+  /* ---- medical & emergency panel (all optional) ----
+     Stored on the account so coaching/medical staff can reach the right people
+     and hospital fast if a player is hurt during a match. "RS" = Rumah Sakit. */
+  var BLOOD = ['A', 'B', 'AB', 'O', 'A+', 'A−', 'B+', 'B−', 'AB+', 'AB−', 'O+', 'O−'];
+  function medicalSectionHTML(u) {
+    var bt = u.bloodType || '';
+    var opts = '<option value="">—</option>' + BLOOD.map(function (b) {
+      return '<option value="' + escapeHtml(b) + '"' + (b === bt ? ' selected' : '') + '>' + escapeHtml(b) + '</option>';
+    }).join('');
+    return '<section class="sec">' +
+      '<div class="shead"><span class="num">02</span><span class="lbl">Medical &amp; emergency <em>(optional)</em></span></div>' +
+      '<div class="reg-form">' +
+        '<p class="muted-sm" style="margin:0 0 4px">All optional. Shared only with coaching and medical staff, so they can act fast if you\'re hurt during a match.</p>' +
+        '<div class="reg-2col">' +
+          '<label class="fld"><span>Blood type</span>' +
+            '<select id="pfBlood" class="inp">' + opts + '</select></label>' +
+          '<label class="fld"><span>Preferred hospital <em>(RS)</em></span>' +
+            '<input id="pfRs" type="text" value="' + escapeHtml(u.preferredRs || '') + '" placeholder="e.g. RS Borromeus, Bandung" /></label>' +
+        '</div>' +
+        '<label class="fld"><span>Allergies</span>' +
+          '<input id="pfAllergies" type="text" value="' + escapeHtml(u.allergies || '') + '" placeholder="e.g. penicillin, peanuts — leave blank if none" /></label>' +
+        '<label class="fld"><span>Medical notes / conditions</span>' +
+          '<textarea id="pfMedical" rows="3" placeholder="Anything staff should know — asthma, past injuries, medication, etc.">' + escapeHtml(u.medical || '') + '</textarea></label>' +
+        '<div class="reg-2col">' +
+          '<label class="fld"><span>Emergency contact</span>' +
+            '<input id="pfEmgName" type="text" value="' + escapeHtml(u.emergencyName || '') + '" placeholder="Name" /></label>' +
+          '<label class="fld"><span>Emergency phone</span>' +
+            '<input id="pfEmgPhone" type="tel" value="' + escapeHtml(u.emergencyPhone || '') + '" placeholder="08…" /></label>' +
+        '</div>' +
+        '<div class="reg-actions">' +
+          '<button type="button" class="btn btn-primary" id="pfSave2">Save changes</button>' +
+          '<span class="reg-msg" id="pfMsg2"></span>' +
+        '</div>' +
+      '</div>' +
+    '</section>';
+  }
+
   /* ---- signed in: profile + edit ---- */
   function renderProfile(u) {
     editPos = u.position;
@@ -178,8 +244,12 @@
         '</div>' +
       '</section>' +
 
+      medicalSectionHTML(u) +
+
+      saldoSectionHTML(u) +
+
       '<section class="sec last">' +
-        '<div class="shead"><span class="num gold">02</span><span class="lbl">Session</span></div>' +
+        '<div class="shead"><span class="num gold">04</span><span class="lbl">Session</span></div>' +
         '<div class="reg-form" style="max-width:480px">' +
           '<p class="muted-sm" style="margin:0">Signed in as <b>' + escapeHtml(u.email || u.phone || u.name) + '</b>.</p>' +
           '<div class="reg-actions"><button type="button" class="btn btn-glass" id="signOutBtn">Sign out</button></div>' +
@@ -187,122 +257,4 @@
       '</section>';
   }
 
-  /* ============================================================
-     Actions
-     ============================================================ */
-  function msg(id, text, ok) {
-    var m = document.getElementById(id);
-    if (m) { m.textContent = text; m.className = 'reg-msg ' + (ok ? 'ok' : 'err'); }
-  }
-
-  function doSignIn() {
-    var id = (document.getElementById('siId') || {}).value || '';
-    if (!id.trim()) return msg('siMsg', 'Enter your email or phone.');
-    STORE.signIn(id).then(function (u) {
-      AUTH.user = u; paintHeader(); AUTH._emit();
-      // straight to registering — that's why people sign in
-      if (window.PSIA_APP) window.PSIA_APP.show('register');
-    }).catch(function (e) { msg('siMsg', e.message || 'Could not sign in.'); });
-  }
-
-  function doDemoSignIn() {
-    STORE.ensureDemoAccount(DEMO)
-      .then(function () { return STORE.signIn(DEMO.email); })
-      .then(function (u) {
-        AUTH.user = u; paintHeader(); AUTH._emit();
-        if (window.PSIA_APP) window.PSIA_APP.show('register');
-      })
-      .catch(function (e) { msg('siMsg', e.message || 'Could not start demo.'); });
-  }
-
-  function doSignUp() {
-    var name = (document.getElementById('suName') || {}).value || '';
-    var email = (document.getElementById('suEmail') || {}).value || '';
-    var phone = (document.getElementById('suPhone') || {}).value || '';
-    if (!name.trim()) return msg('suMsg', 'Enter your name.');
-    if (!signupPos) return msg('suMsg', 'Pick your usual position.');
-    STORE.createAccount({ name: name, position: signupPos, email: email, phone: phone })
-      .then(function (u) {
-        AUTH.user = u; paintHeader(); AUTH._emit();
-        if (window.PSIA_APP) window.PSIA_APP.show('register');
-      })
-      .catch(function (e) { msg('suMsg', e.message || 'Could not create account.'); });
-  }
-
-  function doSaveProfile() {
-    var name = (document.getElementById('pfName') || {}).value || '';
-    var email = (document.getElementById('pfEmail') || {}).value || '';
-    var phone = (document.getElementById('pfPhone') || {}).value || '';
-    if (!name.trim()) return msg('pfMsg', 'Name can\'t be empty.');
-    STORE.updateProfile({ name: name, position: editPos, email: email, phone: phone })
-      .then(function (u) {
-        AUTH.user = u; paintHeader(); AUTH._emit();
-        msg('pfMsg', '✓ Saved', true);
-        setTimeout(function () { var m = document.getElementById('pfMsg'); if (m) m.textContent = ''; }, 2200);
-      })
-      .catch(function (e) { msg('pfMsg', e.message || 'Could not save.'); });
-  }
-
-  function doSignOut() {
-    STORE.signOut().then(function () {
-      AUTH.user = null; paintHeader(); AUTH._emit();
-      renderAuthForms();
-    });
-  }
-
-  /* ============================================================
-     Events (delegated, scoped to #authRoot + header acct button)
-     ============================================================ */
-  function inAuth(t) { return t && t.closest && t.closest('#authRoot'); }
-
-  document.addEventListener('click', function (e) {
-    var t = e.target;
-    if (!inAuth(t)) return;
-
-    // position chips (sign-up + edit)
-    var sp = t.closest('[data-au-pos]');
-    if (sp) {
-      signupPos = sp.getAttribute('data-au-pos');
-      root().querySelectorAll('[data-au-pos]').forEach(function (c) { c.classList.remove('on'); });
-      sp.classList.add('on');
-      return;
-    }
-    var ep = t.closest('[data-au-epos]');
-    if (ep) {
-      editPos = ep.getAttribute('data-au-epos');
-      root().querySelectorAll('[data-au-epos]').forEach(function (c) { c.classList.remove('on'); });
-      ep.classList.add('on');
-      return;
-    }
-
-    if (t.closest('#demoBtn')) { doDemoSignIn(); return; }
-    if (t.closest('#siBtn')) { doSignIn(); return; }
-    if (t.closest('#suBtn')) { doSignUp(); return; }
-    if (t.closest('#pfSave')) { doSaveProfile(); return; }
-    if (t.closest('#signOutBtn')) { doSignOut(); return; }
-    // #goRegister is handled by app.js router via data-view
-  });
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' || !inAuth(e.target)) return;
-    var id = e.target.id;
-    if (id === 'siId') { e.preventDefault(); doSignIn(); }
-    else if (id === 'suName' || id === 'suEmail' || id === 'suPhone') { e.preventDefault(); doSignUp(); }
-  });
-
-  /* ============================================================
-     Hook into the router
-     ============================================================ */
-  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
-  window.PSIA_EXTRA_VIEWS.account = function () { return '<div id="authRoot" class="sqRoot"></div>'; };
-
-  var prevAfter = window.PSIA_AFTER_RENDER;
-  window.PSIA_AFTER_RENDER = function (view) {
-    if (typeof prevAfter === 'function') prevAfter(view);
-    paintHeader();
-    if (view === 'account') renderAccount();
-  };
-
-  // initial header paint once DOM is ready
-  paintHeader();
-})();
+  /* ==================================

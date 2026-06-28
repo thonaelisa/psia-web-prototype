@@ -57,6 +57,53 @@
     return String(name || '').trim().split(/\s+/).map(function (w) { return w[0]; })
       .slice(0, 2).join('').toUpperCase();
   }
+  function rpFmt(n) { var v = Math.round(+n || 0); return 'Rp ' + Math.abs(v).toLocaleString('en-US'); }
+  function payFeeNum(fx) { return parseInt(String((fx && fx.fee) || '').replace(/[^\d]/g, ''), 10) || 0; }
+
+  /* Player-facing payment status for the signed-in user's own call-up.
+     Two ways to pay: claim a cash/transfer payment, or request that the fee be
+     taken from their saldo (only offered when the balance covers it). Either
+     way the committee confirms on the admin Payments page. */
+  function payStripHTML(mine, fx) {
+    if (!mine) return '';
+    var st = mine.payStatus || 'unpaid';
+    var u = state.user || {};
+    var saldo = (typeof u.saldo === 'number') ? u.saldo : (+u.saldo || 0);
+    var fee = payFeeNum(fx);
+    var box = function (border, bg, inner) {
+      return '<div style="margin-top:18px;padding:14px 16px;border:1px solid ' + border + ';background:' + bg + ';border-radius:11px;font-size:13px;line-height:1.5">' + inner + '</div>';
+    };
+    if (st === 'paid') {
+      var amt = mine.payAmount ? ' · <b style="font-family:var(--mono)">' + rpFmt(mine.payAmount) + '</b>' : '';
+      var via = mine.payMethod === 'saldo' ? ' from your saldo' : '';
+      return box('#1E5237', 'rgba(54,210,123,.08)',
+        '<span style="color:#36D27B;font-weight:700">✓ Payment confirmed</span>' + amt + via +
+        ' <span style="color:#5E6A82">— thanks!</span>');
+    }
+    if (st === 'claimed') {
+      var sal = mine.payMethod === 'saldo';
+      var head = sal ? 'Saldo payment requested.' : 'Payment claim sent.';
+      var sub = sal ? 'The committee will confirm and deduct it from your balance.' : 'Waiting for the committee to confirm.';
+      return box('#5A4A12', 'rgba(245,197,66,.08)',
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">' +
+          '<span><span style="color:#F5C542;font-weight:700">' + head + '</span> <span style="color:#9DAAC0">' + sub + '</span></span>' +
+          '<span class="lk" data-mt-unclaim="1" style="color:#9DAAC0;font-weight:700;font-size:12px;white-space:nowrap">Undo</span>' +
+        '</div>');
+    }
+    var feeTxt = fx.fee ? ' (' + escapeHtml(fx.fee) + ')' : '';
+    var cashBtn = '<span class="lk" data-mt-claim="1" style="background:#3D7BF0;color:#fff;font-weight:800;font-size:13px;padding:9px 16px;border-radius:9px;white-space:nowrap">I\'ve paid →</span>';
+    var saldoBtn = (fee > 0 && saldo >= fee)
+      ? '<span class="lk" data-mt-claim-saldo="1" style="background:#1E5237;border:1px solid #36D27B;color:#EAFBF0;font-weight:800;font-size:13px;padding:9px 16px;border-radius:9px;white-space:nowrap">Pay from saldo →</span>'
+      : '';
+    var saldoNote = (fee > 0 && saldo < fee)
+      ? '<div style="margin-top:8px;font-size:11.5px;color:#5E6A82;font-family:var(--mono)">Saldo ' + rpFmt(saldo) + ' — not enough to cover this fee</div>'
+      : '';
+    return box('#25324A', '#0A1326',
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">' +
+        '<span style="color:#9DAAC0">Already paid your match fee' + feeTxt + '?</span>' +
+        '<span style="display:flex;gap:10px;flex-wrap:wrap">' + saldoBtn + cashBtn + '</span>' +
+      '</div>' + saldoNote);
+  }
 
   /* Parse "SAT · 28 JUN 2026 · 20:00" → epoch ms (Asia/Jakarta, +07:00). */
   function parseDateLong(s) {
@@ -122,6 +169,10 @@
      State
      ============================================================ */
   var FIXTURES = buildFixtures();
+  /* Expose so the admin Payments page reads the SAME fixtures + match ids that
+     players register under (keeps "who registered" and "who paid" aligned). */
+  window.PSIA_FIXTURES = FIXTURES;
+  window.PSIA_MATCH_ID_FOR = matchIdFor;
   var state = {
     selected: 0,
     pos: null,          // chosen position for the form (null → user default)
@@ -339,7 +390,8 @@
           '<div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#3D7BF0,#1E3F7A);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;color:#fff">' + escapeHtml(initials(u.name)) + '</div>' +
           '<div>' +
             '<div style="font-weight:800;font-size:16px">' + escapeHtml(u.name) + '</div>' +
-            '<div style="font-size:11.5px;color:#5E6A82;font-family:var(--mono)">' + (u.position ? POS_LABEL[u.position].toUpperCase() : 'PLAYER') + '</div>' +
+            '<div style="font-size:11.5px;color:#5E6A82;font-family:var(--mono)">' + (u.position ? POS_LABEL[u.position].toUpperCase() : 'PLAYER') +
+              ' · <span style="color:' + ((u.saldo || 0) > 0 ? '#36D27B' : '#5E6A82') + '">SALDO ' + rpFmt(u.saldo || 0) + '</span></div>' +
           '</div>' +
         '</div>' +
         '<span class="lk" data-view="account" style="color:#5C95F5;font-weight:700;font-size:12.5px;white-space:nowrap">edit profile</span>' +
@@ -361,7 +413,8 @@
           '<span style="color:#5E6A82">Pay on matchday or via transfer.</span></div>' +
         '<div class="mt-submit lk" data-mt-submit="1" style="' + submitStyle + '">' + (registered ? '✓ Registered — update' : 'Register →') + '</div>' +
       '</div>' +
-      feedback;
+      feedback +
+      payStripHTML(mine, fx);
   }
 
   function squadHTML() {
@@ -431,96 +484,4 @@
     if (!document.getElementById('mtSS')) return;
     tickCountdown();
     cdTimer = setInterval(function () {
-      if (!document.getElementById('mtSS')) { clearInterval(cdTimer); cdTimer = null; return; }
-      tickCountdown();
-    }, 1000);
-  }
-
-  /* ============================================================
-     Actions
-     ============================================================ */
-  function selectMatch(i) {
-    if (i === state.selected) return;
-    state.selected = i;
-    state.pos = null;
-    state.msg = null;
-    state.regs = [];
-    render();                 // immediate repaint (squad shows "Loading…")
-    loadRegs(render);         // then fill the squad + live fill
-  }
-
-  function pickPos(p) {
-    state.pos = p;
-    // repaint only the call-up body to keep the squad scroll position
-    var host = document.querySelector('#matchRoot .mt-grid > div:first-child > div:last-child');
-    // simplest robust path: re-render the whole call-up card
-    render();
-  }
-
-  function submit() {
-    var fx = selFx();
-    var u = state.user;
-    if (!u) { state.msg = { text: 'Please sign in first.', ok: false }; render(); return; }
-    var note = (document.getElementById('mtNote') || {}).value || '';
-    var pos = state.pos || u.position;
-    if (!pos) { state.msg = { text: 'Pick a position.', ok: false }; render(); return; }
-    STORE.register({ matchId: matchIdFor(fx), name: u.name, position: pos, note: note, accountId: u.id })
-      .then(function () {
-        state.msg = { text: '✓ You\'re on the list for ' + fx.opp + ' (' + pos + ').', ok: true };
-        loadRegs(render);
-      })
-      .catch(function (e) {
-        state.msg = { text: e.message || 'Could not register.', ok: false };
-        render();
-      });
-  }
-
-  /* ============================================================
-     Events (delegated, scoped to #matchRoot)
-     ============================================================ */
-  function within(t) { return t && t.closest && t.closest('#matchRoot'); }
-
-  document.addEventListener('click', function (e) {
-    var t = e.target;
-    if (!within(t)) return;
-    var sel = t.closest('[data-mt-select]');
-    if (sel) { selectMatch(parseInt(sel.getAttribute('data-mt-select'), 10) || 0); return; }
-    var pos = t.closest('[data-mt-pos]');
-    if (pos) { pickPos(pos.getAttribute('data-mt-pos')); return; }
-    if (t.closest('[data-mt-submit]')) { submit(); return; }
-    // data-view (sign in / edit profile) + data-match (report) handled by app.js
-  });
-
-  // Enter inside the note submits
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' || !within(e.target)) return;
-    if (e.target.id === 'mtNote') { e.preventDefault(); submit(); }
-  });
-
-  /* ============================================================
-     Hook into the router (overrides squad.js's plain `register` view)
-     ============================================================ */
-  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
-  window.PSIA_EXTRA_VIEWS.register = function () { return '<div id="matchRoot"></div>'; };
-
-  var prevAfter = window.PSIA_AFTER_RENDER;
-  window.PSIA_AFTER_RENDER = function (view) {
-    if (typeof prevAfter === 'function') prevAfter(view);
-    if (view !== 'register') {
-      if (cdTimer) { clearInterval(cdTimer); cdTimer = null; }
-      return;
-    }
-    // fresh enter: reset transient state, load session + squad, then paint
-    state.pos = null;
-    state.msg = null;
-    state.regs = [];
-    state.loadingRegs = true;
-    var AUTH = window.PSIA_AUTH;
-    (AUTH ? AUTH.refresh() : Promise.resolve(null)).then(function (user) {
-      if (!root()) return;            // navigated away while loading
-      state.user = user || null;
-      render();                       // paint with "Loading…" squad
-      loadRegs(render);               // fill squad
-    });
-  };
-})();
+      if (!document.getElementById('mtSS')) { clearInterval(cdTimer); cdTimer = null; return

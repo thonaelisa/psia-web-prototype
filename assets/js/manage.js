@@ -24,7 +24,7 @@
   'use strict';
 
   var STORE = window.PSIA_STORE;
-  var KEYS = (STORE && STORE.CONTENT_KEYS) || ['next', 'season', 'results', 'scorers', 'fantasy', 'statsTable'];
+  var KEYS = (STORE && STORE.CONTENT_KEYS) || ['next', 'season', 'results', 'scorers', 'fantasy', 'statsTable', 'treasury'];
 
   /* Same soft, shared passcode + unlock flag as the Team-selection board,
      so a volunteer who unlocks one tool is trusted for both this session. */
@@ -56,6 +56,15 @@
   var dirty = false;
   var POS = ['GK', 'DF', 'MF', 'FW', 'FWD', 'DEF', 'MID', '']; // tolerant for the stats table
 
+  /* Treasury (kas) add-entry form state + category options per direction.
+     Forward-compatible with a future club_ledger table — entry fields are
+     id / date / direction / category / amount / match_id / note. */
+  var txForm = null;
+  var TX_CATS = {
+    income:  [['match_fee', 'Match fee'], ['dues', 'Dues'], ['sponsor', 'Sponsor'], ['other', 'Other']],
+    expense: [['pitch', 'Pitch'], ['referee', 'Referee'], ['equipment', 'Equipment'], ['water', 'Water'], ['other', 'Other']]
+  };
+
   /* How many rows to surface in each list — mirrors tools/convert.py. */
   var TOP_FANTASY = 8, TOP_SCORERS = 6, TOP_STATS = 12;
   /* SheetJS (xlsx) is loaded on demand only when a volunteer opens the
@@ -67,12 +76,23 @@
   var excelState = { parsed: null, error: null, fileName: '', loading: false };
 
   function clone(x) { return JSON.parse(JSON.stringify(x)); }
+  /* Default shape for a content key when nothing has shipped yet. */
+  function defaultContent(k) {
+    if (k === 'next' || k === 'season') return {};
+    if (k === 'treasury') return { opening_balance: 0, entries: [] };
+    return [];
+  }
   function loadDraft() {
     draft = {};
     KEYS.forEach(function (k) {
       var v = window.PSIA_DATA[k];
-      draft[k] = v == null ? (k === 'next' || k === 'season' ? {} : []) : clone(v);
+      draft[k] = v == null ? defaultContent(k) : clone(v);
     });
+    /* Guarantee a complete treasury shape even if a partial overlay shipped. */
+    if (!draft.treasury || typeof draft.treasury !== 'object') draft.treasury = { opening_balance: 0, entries: [] };
+    if (typeof draft.treasury.opening_balance !== 'number') draft.treasury.opening_balance = +draft.treasury.opening_balance || 0;
+    if (!Array.isArray(draft.treasury.entries)) draft.treasury.entries = [];
+    txForm = null;   // reset the add-entry form to a fresh state
     dirty = false;
   }
   function markDirty() { dirty = true; var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'visible'; }
@@ -124,6 +144,8 @@
     ['fantasy', 'Fantasy'],
     ['statsTable', 'Player stats'],
     ['season', 'Season'],
+    ['treasury', 'Treasury'],
+    ['saldo', 'Member saldo'],
     ['backup', 'Publish & backup']
   ];
 
@@ -141,6 +163,7 @@
         'to update the live site for everyone.</div>' +
         '<div class="mng-toolrow">' +
           '<button class="btn btn-glass btn-sm" data-view="admin">🧑‍🤝‍🧑 Open Team selection board →</button>' +
+          '<button class="btn btn-glass btn-sm" data-view="payments">💳 Open Payments →</button>' +
         '</div>' +
         '<div class="mng-tabs">' + TABS.map(function (t) {
           return '<button class="mng-tab' + (tab === t[0] ? ' active' : '') + '" data-tab="' + t[0] + '">' + t[1] + '</button>';
@@ -159,6 +182,8 @@
       case 'fantasy': return listHTML('fantasy', [['n', 'Manager / player', 'text'], ['p', 'Points', 'num']], 'Add row');
       case 'statsTable': return statsHTML();
       case 'season': return seasonHTML();
+      case 'treasury': return treasuryHTML();
+      case 'saldo': return saldoHTML();
       case 'backup': return backupHTML();
     }
     return '';
@@ -335,6 +360,255 @@
   }
 
   /* ===============================================================
+     TREASURY (kas) — opening balance + income/expense entries.
+     Kas balance = opening_balance + Σincome − Σexpense. Amounts are
+     stored POSITIVE; `direction` carries the sign. Entries are kept in
+     the overlay (same Save/Publish/Backup/Revert path as everything
+     else) so nothing is destroyed before the treasurer publishes.
+     =============================================================== */
+  function todayISO() {
+    var d = new Date(), m = String(d.getMonth() + 1), day = String(d.getDate());
+    return d.getFullYear() + '-' + (m.length < 2 ? '0' + m : m) + '-' + (day.length < 2 ? '0' + day : day);
+  }
+  function money(n) {
+    var v = Math.round(+n || 0), s = Math.abs(v).toLocaleString('en-US');
+    return (v < 0 ? '-' : '') + 'Rp ' + s;
+  }
+  function freshTxForm() {
+    return { date: todayISO(), direction: 'income', category: TX_CATS.income[0][0], amount: '', match_id: '', note: '' };
+  }
+  function txCatLabel(dir, cat) {
+    var list = TX_CATS[dir] || [];
+    for (var i = 0; i < list.length; i++) { if (list[i][0] === cat) return list[i][1]; }
+    return cat || '—';
+  }
+  /* Next id as a zero-padded counter based on the current max (tx_0001, …). */
+  function nextTxId(entries) {
+    var max = 0;
+    (entries || []).forEach(function (e) {
+      var m = /^tx_(\d+)$/.exec(String(e.id || ''));
+      if (m) { var n = parseInt(m[1], 10); if (n > max) max = n; }
+    });
+    var s = String(max + 1);
+    while (s.length < 4) s = '0' + s;
+    return 'tx_' + s;
+  }
+  function treasuryDraftTotals() {
+    var t = draft.treasury || { opening_balance: 0, entries: [] };
+    var ob = Math.round(+t.opening_balance || 0), inc = 0, exp = 0;
+    (t.entries || []).forEach(function (e) {
+      var amt = Math.abs(Math.round(+e.amount || 0));
+      if (e.direction === 'income') inc += amt; else exp += amt;
+    });
+    return { balance: ob + inc - exp, income: inc, expense: exp, opening: ob };
+  }
+  function kasBarHTML() {
+    var t = treasuryDraftTotals();
+    return '<div class="mng-kascell"><div class="k">Kas balance</div><div class="v gold">' + money(t.balance) + '</div></div>' +
+      '<div class="mng-kascell"><div class="k">In</div><div class="v win">' + money(t.income) + '</div></div>' +
+      '<div class="mng-kascell"><div class="k">Out</div><div class="v loss">' + money(t.expense) + '</div></div>';
+  }
+  function updateKasBar() { var el = document.getElementById('mngKasBar'); if (el) el.innerHTML = kasBarHTML(); }
+
+  function treasuryHTML() {
+    if (!txForm) txForm = freshTxForm();
+    var cats = TX_CATS[txForm.direction] || [];
+    var catOpts = cats.map(function (c) {
+      return '<option value="' + c[0] + '"' + (txForm.category === c[0] ? ' selected' : '') + '>' + esc(c[1]) + '</option>';
+    }).join('');
+    var matchOpts = '<option value="">— none —</option>' + (draft.results || []).map(function (r) {
+      return '<option value="' + esc(r.id) + '"' + (txForm.match_id === r.id ? ' selected' : '') + '>' +
+        esc((r.date || '') + ' · ' + (r.opp || '')) + '</option>';
+    }).join('');
+    var entries = (draft.treasury.entries || []).slice().sort(function (a, b) {
+      return String(b.date).localeCompare(String(a.date));
+    });
+    var rows = entries.map(function (e) {
+      var amt = Math.abs(Math.round(+e.amount || 0));
+      var signed = (e.direction === 'income' ? '+' : '−') + money(amt);
+      var cls = e.direction === 'income' ? 'win' : 'loss';
+      return '<div class="mng-trow">' +
+        '<span class="t-date mono">' + esc(e.date || '') + '</span>' +
+        '<span class="t-cat">' + esc(txCatLabel(e.direction, e.category)) + '</span>' +
+        '<span class="t-amt mono ' + cls + '">' + signed + '</span>' +
+        '<span class="t-note">' + esc(e.note || '') + '</span>' +
+        '<button class="mng-del slim" data-txdel="' + esc(e.id) + '" title="Remove this entry">×</button>' +
+      '</div>';
+    }).join('');
+    return '<div class="mng-card">' +
+      '<div class="mng-h">Club treasury <em>kas — income &amp; expenses</em></div>' +
+      '<div class="mng-kasbar" id="mngKasBar">' + kasBarHTML() + '</div>' +
+      '<div class="mng-sub">Opening balance</div>' +
+      '<div class="mng-grid2">' +
+        '<label class="fld mng-fld"><span>Opening balance <em>kas before any logged entry (Rp)</em></span>' +
+          '<input type="number" id="txOpening" value="' + esc(draft.treasury.opening_balance) + '" /></label>' +
+      '</div>' +
+      '<div class="mng-sub">Add entry</div>' +
+      '<div class="mng-tform">' +
+        '<label class="fld mng-fld"><span>Date</span><input type="date" id="txDate" value="' + esc(txForm.date) + '" /></label>' +
+        '<label class="fld mng-fld"><span>Direction</span><select id="txDir">' +
+          '<option value="income"' + (txForm.direction === 'income' ? ' selected' : '') + '>Income</option>' +
+          '<option value="expense"' + (txForm.direction === 'expense' ? ' selected' : '') + '>Expense</option>' +
+        '</select></label>' +
+        '<label class="fld mng-fld"><span>Category</span><select id="txCat">' + catOpts + '</select></label>' +
+        '<label class="fld mng-fld"><span>Amount <em>Rp</em></span><input type="number" id="txAmount" min="0" step="1000" value="' + esc(txForm.amount) + '" /></label>' +
+        '<label class="fld mng-fld"><span>Link match <em>optional</em></span><select id="txMatch">' + matchOpts + '</select></label>' +
+        '<label class="fld mng-fld mng-tnote"><span>Note</span><input type="text" id="txNote" value="' + esc(txForm.note) + '" placeholder="e.g. GW16 fees collected" /></label>' +
+      '</div>' +
+      '<button class="btn btn-primary btn-sm mng-inline" id="txAdd">+ Add entry</button>' +
+      '<div class="mng-sub">Entries <em>newest first</em></div>' +
+      (rows || '<div class="mng-empty">No entries yet.</div>') +
+    '</div>';
+  }
+  function addTxEntry() {
+    var amt = Math.abs(Math.round(+txForm.amount || 0));
+    if (!txForm.date) { msg('Pick a date for the entry.', true); return; }
+    if (!amt) { msg('Enter an amount greater than zero.', true); return; }
+    draft.treasury.entries.push({
+      id: nextTxId(draft.treasury.entries),
+      date: txForm.date,
+      direction: txForm.direction === 'expense' ? 'expense' : 'income',
+      category: txForm.category || 'other',
+      amount: amt,
+      match_id: txForm.match_id ? txForm.match_id : null,
+      note: (txForm.note || '').trim()
+    });
+    markDirty();
+    // keep date + direction for fast multi-entry, clear the rest
+    var dir = txForm.direction;
+    txForm = { date: txForm.date, direction: dir, category: (TX_CATS[dir][0] || ['other'])[0], amount: '', match_id: '', note: '' };
+    rerenderBody();
+    msg('Entry added — press Save changes to keep it.');
+  }
+
+  /* ===============================================================
+     MEMBER SALDO — prepaid wallets, stored on accounts (PSIA_STORE).
+     Top-ups and manual adjustments write IMMEDIATELY (no draft / Save
+     step), like the Excel importer. A top-up can also post income to the
+     club kas; when it does we re-sync draft.treasury so a later content
+     "Save changes" here won't clobber the new entry.
+     =============================================================== */
+  var saldoState = {
+    loaded: false, loading: false, accounts: [], selId: '', q: '',
+    form: { amount: '', method: 'cash', note: '', toTreasury: true },
+    adj: { amount: '', note: '' }, showLog: false, msg: null
+  };
+  var SREASONM = { topup: 'Top-up', fee: 'Match fee', refund: 'Refund', adjust: 'Adjustment' };
+  function dShortM(ms) { if (!ms) return ''; try { return new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' }); } catch (e) { return ''; } }
+  function selAcct() { return saldoState.accounts.find(function (a) { return a.id === saldoState.selId; }) || null; }
+  function saldoMatch(a, q) {
+    q = (q || '').trim().toLowerCase(); if (!q) return true;
+    return (String(a.name || '').toLowerCase().indexOf(q) >= 0) ||
+           (String(a.email || '').toLowerCase().indexOf(q) >= 0) ||
+           (String(a.phone || '').toLowerCase().indexOf(q) >= 0);
+  }
+  function loadSaldo() {
+    if (saldoState.loading) return;
+    saldoState.loading = true;
+    STORE.getAccounts().then(function (list) {
+      saldoState.accounts = list || []; saldoState.loaded = true; saldoState.loading = false;
+      if (tab === 'saldo') rerenderBody();
+    });
+  }
+  function refreshSaldo(then) {
+    STORE.getAccounts().then(function (list) { saldoState.accounts = list || []; if (then) then(); rerenderBody(); });
+  }
+  function memberRowsHTML() {
+    var accts = saldoState.accounts.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+    var filtered = accts.filter(function (a) { return saldoMatch(a, saldoState.q); });
+    if (!filtered.length) return '<div class="mng-empty">No members match.</div>';
+    return filtered.map(function (a) {
+      var bal = +a.saldo || 0, selc = a.id === saldoState.selId;
+      return '<div class="mng-trow" data-sld-pick="' + esc(a.id) + '" style="cursor:pointer;' + (selc ? 'background:rgba(61,123,240,.10);' : '') + '">' +
+        '<span class="t-cat" style="flex:1.2">' + esc(a.name || '—') + '</span>' +
+        '<span class="t-note" style="flex:1.6;color:#9DAAC0">' + esc(a.email || a.phone || '') + '</span>' +
+        '<span class="t-amt mono" style="color:' + (bal > 0 ? '#36D27B' : (bal < 0 ? '#F0584B' : '#9DAAC0')) + '">' + money(bal) + '</span>' +
+      '</div>';
+    }).join('');
+  }
+  function kv(label, val) {
+    return '<div style="display:flex;flex-direction:column;gap:3px">' +
+      '<span style="font-family:var(--mono);font-size:10px;letter-spacing:.08em;color:#5E6A82">' + esc(label) + '</span>' +
+      '<b style="font-size:13.5px">' + esc(val) + '</b></div>';
+  }
+  function selectedAcctHTML(a) {
+    var f = saldoState.form, adj = saldoState.adj, bal = +a.saldo || 0;
+    var log = (a.saldoLog || []).slice().sort(function (x, y) { return y.ts - x.ts; }).slice(0, 12);
+    var logHTML = saldoState.showLog
+      ? (log.length ? log.map(function (e) {
+          var pos = e.delta >= 0;
+          return '<div class="mng-trow">' +
+            '<span class="t-date mono">' + esc(dShortM(e.ts)) + '</span>' +
+            '<span class="t-cat">' + esc(SREASONM[e.reason] || e.reason) + (e.note ? ' · ' + esc(e.note) : '') + '</span>' +
+            '<span class="t-amt mono ' + (pos ? 'win' : 'loss') + '">' + (pos ? '+' : '−') + money(Math.abs(e.delta)) + '</span>' +
+          '</div>';
+        }).join('') : '<div class="mng-empty">No history yet.</div>')
+      : '';
+    return '<div class="mng-card">' +
+      '<div class="mng-h">' + esc(a.name || 'Member') + ' <em>balance ' + money(bal) + '</em></div>' +
+      '<div style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:8px">' +
+        kv('Email', a.email || '—') + kv('Phone', a.phone || '—') + kv('Position', a.position || '—') + kv('Member since', a.createdAt ? dShortM(a.createdAt) : '—') +
+      '</div>' +
+      '<div class="mng-sub">Top up <em>adds to balance</em></div>' +
+      '<div class="mng-tform">' +
+        '<label class="fld mng-fld"><span>Amount <em>Rp</em></span><input type="number" id="sldAmt" min="0" step="1000" value="' + esc(f.amount) + '" /></label>' +
+        '<label class="fld mng-fld"><span>Method</span><select id="sldMethod"><option value="cash"' + (f.method === 'cash' ? ' selected' : '') + '>Cash</option><option value="transfer"' + (f.method === 'transfer' ? ' selected' : '') + '>Transfer</option></select></label>' +
+        '<label class="fld mng-fld mng-tnote"><span>Note <em>optional</em></span><input type="text" id="sldNote" value="' + esc(f.note) + '" placeholder="e.g. season top-up" /></label>' +
+      '</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9DAAC0;margin:4px 0 2px"><input type="checkbox" id="sldKas"' + (f.toTreasury ? ' checked' : '') + '> Add this top-up to the club kas (Treasury)</label>' +
+      '<button class="btn btn-primary btn-sm mng-inline" id="sldTopup">+ Top up saldo</button>' +
+      '<div class="mng-sub">Manual adjustment <em>correction, not a cash-in</em></div>' +
+      '<div class="mng-tform">' +
+        '<label class="fld mng-fld"><span>Amount <em>+ add / − remove</em></span><input type="number" id="sldAdjAmt" step="1000" value="' + esc(adj.amount) + '" placeholder="e.g. -10000" /></label>' +
+        '<label class="fld mng-fld mng-tnote"><span>Reason</span><input type="text" id="sldAdjNote" value="' + esc(adj.note) + '" placeholder="why this correction" /></label>' +
+      '</div>' +
+      '<button class="btn btn-glass btn-sm mng-inline" id="sldAdjust">± Apply adjustment</button>' +
+      '<div style="margin-top:14px"><button class="btn btn-glass btn-sm" id="sldLog">' + (saldoState.showLog ? 'Hide history' : 'Show history') + '</button></div>' +
+      (saldoState.showLog ? '<div style="margin-top:10px">' + logHTML + '</div>' : '') +
+    '</div>';
+  }
+  function saldoHTML() {
+    if (!saldoState.loaded) {
+      if (!saldoState.loading) loadSaldo();
+      return '<div class="mng-card"><div class="mng-h">Member saldo</div><div class="mng-empty">Loading members…</div></div>';
+    }
+    var total = saldoState.accounts.reduce(function (s, a) { return s + (+a.saldo || 0); }, 0);
+    var note = '<div class="mng-note">Saldo changes apply <b>immediately</b> on this device — the “Save changes” / “Publish” buttons below don’t affect saldo.</div>';
+    var listCard = '<div class="mng-card">' +
+      '<div class="mng-h">All members <em>' + saldoState.accounts.length + ' · club owes ' + money(total) + '</em></div>' +
+      '<label class="fld mng-fld"><span>Search</span><input type="text" id="sldSearch" value="' + esc(saldoState.q) + '" placeholder="name, email or phone" autocomplete="off" /></label>' +
+      '<div id="sldList" style="margin-top:8px">' + memberRowsHTML() + '</div>' +
+    '</div>';
+    var sel = selAcct();
+    var detailCard = sel ? selectedAcctHTML(sel)
+      : '<div class="mng-card"><div class="mng-empty">Pick a member above to top up or adjust their saldo.</div></div>';
+    var m = saldoState.msg ? '<div class="reg-msg ' + (saldoState.msg.ok ? 'ok' : 'err') + '" style="margin-top:6px">' + esc(saldoState.msg.text) + '</div>' : '';
+    return note + listCard + detailCard + m;
+  }
+  function sldDoTopup() {
+    var a = selAcct(); if (!a) return;
+    var amt = parseInt(saldoState.form.amount, 10) || 0;
+    if (amt <= 0) { saldoState.msg = { text: 'Enter a top-up amount.', ok: false }; rerenderBody(); return; }
+    var toK = saldoState.form.toTreasury;
+    STORE.topUpSaldo(a.id, { amount: amt, method: saldoState.form.method, note: saldoState.form.note, toTreasury: toK }).then(function (acct) {
+      if (toK) { try { draft.treasury = clone(window.PSIA_DATA.treasury); } catch (e) {} }
+      saldoState.form.amount = ''; saldoState.form.note = '';
+      saldoState.msg = { text: 'Topped up ' + acct.name + ' · new balance ' + money(acct.saldo) + (toK ? ' (added to kas)' : '') + '.', ok: true };
+      refreshSaldo();
+    }).catch(function (e) { saldoState.msg = { text: e.message || 'Could not top up.', ok: false }; rerenderBody(); });
+  }
+  function sldDoAdjust() {
+    var a = selAcct(); if (!a) return;
+    var d = parseInt(saldoState.adj.amount, 10) || 0;
+    if (!d) { saldoState.msg = { text: 'Enter a non-zero adjustment (e.g. -10000).', ok: false }; rerenderBody(); return; }
+    STORE.adjustSaldo(a.id, d, saldoState.adj.note).then(function (acct) {
+      saldoState.adj.amount = ''; saldoState.adj.note = '';
+      saldoState.msg = { text: 'Adjusted ' + acct.name + ' by ' + (d >= 0 ? '+' : '−') + money(Math.abs(d)) + ' · balance ' + money(acct.saldo) + '.', ok: true };
+      refreshSaldo();
+    }).catch(function (e) { saldoState.msg = { text: e.message || 'Could not adjust.', ok: false }; rerenderBody(); });
+  }
+
+  /* ===============================================================
      UPDATE FROM EXCEL — upload the workbook, parse, confirm, save.
      Reads Top scorers, Fantasy and Player stats from the same
      workbook tools/convert.py uses. Columns are found by HEADER NAME
@@ -352,337 +626,4 @@
     if (!raw) return '';
     var s = String(raw).toUpperCase();
     if (s.indexOf('GK') >= 0) return 'GK';
-    if (['ST', 'CF', 'AMR', 'AML', 'FW', 'WING'].some(function (t) { return s.indexOf(t) >= 0; })) return 'FWD';
-    if (['CB', 'LB', 'RB', 'WB', 'DF'].some(function (t) { return s.indexOf(t) >= 0; })) return 'DEF';
-    if (['DM', 'CM', 'AMC', 'MF', 'MID'].some(function (t) { return s.indexOf(t) >= 0; })) return 'MID';
-    return '';
-  }
-  function cellV(ws, r, c) { var a = window.XLSX.utils.encode_cell({ r: r, c: c }); var x = ws[a]; return x ? x.v : null; }
-  function wsRange(ws) { return ws['!ref'] ? window.XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } }; }
-  function findCol(ws, hRow, pred) {
-    var rg = wsRange(ws);
-    for (var c = rg.s.c; c <= rg.e.c; c++) {
-      var v = cellV(ws, hRow, c);
-      if (v != null && pred(String(v).trim().toLowerCase())) return c;
-    }
-    return -1;
-  }
-  function needSheet(wb, name) {
-    var s = wb.Sheets[name];
-    if (!s) throw new Error('Couldn’t find the "' + name + '" sheet. Found: ' + wb.SheetNames.join(', '));
-    return s;
-  }
-
-  /* The actual parse — mirrors tools/convert.py exactly. */
-  function parseWorkbook(wb) {
-    var X = window.XLSX;
-    // --- Fantasy Points: PLAYER + TOTAL POINTS, header row 1, data from row 4
-    var fp = needSheet(wb, 'Fantasy Points');
-    var fpPlayer = findCol(fp, 0, function (s) { return s === 'player'; });
-    var fpTotal = findCol(fp, 0, function (s) { return s === 'total points'; });
-    if (fpTotal < 0) fpTotal = findCol(fp, 0, function (s) { return s.indexOf('total') === 0; });
-    if (fpPlayer < 0 || fpTotal < 0) throw new Error('"Fantasy Points" sheet is missing a PLAYER or TOTAL POINTS column.');
-    var lb = [], rg = wsRange(fp);
-    for (var r = 3; r <= rg.e.r; r++) {
-      var nm = cellV(fp, r, fpPlayer);
-      if (!nm || !String(nm).trim()) continue;
-      lb.push({ full: String(nm).trim(), total: n2i(cellV(fp, r, fpTotal)) });
-    }
-
-    // --- Player Stats: header row 5, data from row 6
-    var ps = needSheet(wb, 'Player Stats');
-    var psPlayer = findCol(ps, 4, function (s) { return s === 'player'; });
-    var psCaps = findCol(ps, 4, function (s) { return s === 'caps'; });
-    var psGoal = findCol(ps, 4, function (s) { return s === 'goal' || s === 'goals'; });
-    var psAst = findCol(ps, 4, function (s) { return s === 'assist' || s === 'assists'; });
-    var psCs = findCol(ps, 4, function (s) { return s.indexOf('clean') >= 0; });
-    if (psPlayer < 0) throw new Error('"Player Stats" sheet is missing its PLAYER column (expected headers on row 5).');
-    var stats = [], rg2 = wsRange(ps);
-    for (var r2 = 5; r2 <= rg2.e.r; r2++) {
-      var nm2 = cellV(ps, r2, psPlayer);
-      if (!nm2 || !String(nm2).trim()) continue;
-      stats.push({
-        full: String(nm2).trim(),
-        caps: n2i(cellV(ps, r2, psCaps)), goals: n2i(cellV(ps, r2, psGoal)),
-        assists: n2i(cellV(ps, r2, psAst)), cs: n2i(cellV(ps, r2, psCs))
-      });
-    }
-
-    // --- Player Database: name (col A) + position, header row 1, data from row 2
-    var posByName = {};
-    var pdb = wb.Sheets['Player Database'];
-    if (pdb) {
-      var pdName = findCol(pdb, 0, function (s) { return s.indexOf('nama lengkap') >= 0; });
-      if (pdName < 0) pdName = 0;
-      var pdPos = findCol(pdb, 0, function (s) { return s.indexOf('position') >= 0; });
-      if (pdPos < 0) pdPos = 2;
-      var rg3 = wsRange(pdb);
-      for (var r3 = 1; r3 <= rg3.e.r; r3++) {
-        var nm3 = cellV(pdb, r3, pdName);
-        if (!nm3 || !String(nm3).trim()) continue;
-        posByName[nrm(nm3)] = posBucket(cellV(pdb, r3, pdPos));
-      }
-    }
-
-    // --- assemble (same rules as convert.py)
-    var totalByName = {}; lb.forEach(function (p) { totalByName[nrm(p.full)] = p.total; });
-
-    var scorers = stats.filter(function (p) { return p.goals > 0; })
-      .sort(function (a, b) { return b.goals - a.goals; })
-      .slice(0, TOP_SCORERS)
-      .map(function (p) { return { n: disp(p.full), g: p.goals }; });
-
-    var fantasy = lb.slice(0, TOP_FANTASY).map(function (p) { return { n: disp(p.full), p: p.total }; });
-
-    var statsTable = stats.map(function (p) {
-      return {
-        n: disp(p.full), pos: posByName[nrm(p.full)] || '',
-        apps: p.caps, g: p.goals, a: p.assists, cs: p.cs, pts: (totalByName[nrm(p.full)] || 0)
-      };
-    }).sort(function (a, b) { return b.pts - a.pts; }).slice(0, TOP_STATS);
-
-    if (!scorers.length && !fantasy.length && !statsTable.length) {
-      throw new Error('The workbook opened but no player rows were found. Is this the right file?');
-    }
-    return { scorers: scorers, fantasy: fantasy, statsTable: statsTable, counts: { lb: lb.length, stats: stats.length } };
-  }
-
-  function loadScript(src, ok, fail) {
-    var s = document.createElement('script');
-    s.src = src; s.onload = ok; s.onerror = fail;
-    document.head.appendChild(s);
-  }
-  function ensureXLSX(cb) {
-    if (window.XLSX) return cb();
-    excelState.loading = true; rerenderBody();
-    // Try the bundled copy first (works offline); fall back to the CDN.
-    loadScript(XLSX_LOCAL,
-      function () { excelState.loading = false; cb(); },
-      function () {
-        loadScript(XLSX_CDN,
-          function () { excelState.loading = false; cb(); },
-          function () {
-            excelState.loading = false;
-            excelState.error = 'Could not load the Excel reader. Make sure assets/js/vendor/xlsx.full.min.js exists (or connect to the internet).';
-            rerenderBody();
-          });
-      });
-  }
-  function handleExcelFile(input) {
-    var file = input.files && input.files[0];
-    if (!file) return;
-    excelState.fileName = file.name; excelState.error = null; excelState.parsed = null;
-    ensureXLSX(function () {
-      var reader = new FileReader();
-      reader.onload = function (e) {
-        try {
-          var wb = window.XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
-          excelState.parsed = parseWorkbook(wb);
-          excelState.error = null;
-        } catch (err) {
-          excelState.parsed = null;
-          excelState.error = (err && err.message) ? err.message : 'Could not read that file.';
-        }
-        rerenderBody();
-      };
-      reader.onerror = function () { excelState.error = 'Could not read that file.'; rerenderBody(); };
-      reader.readAsArrayBuffer(file);
-    });
-  }
-  function confirmExcel() {
-    var p = excelState.parsed; if (!p) return;
-    draft.scorers = clone(p.scorers);
-    draft.fantasy = clone(p.fantasy);
-    draft.statsTable = clone(p.statsTable);
-    markDirty();
-    save();                       // persist overlay + reflect on public views
-    excelState.parsed = null;     // close the preview
-    msg('Top scorers, fantasy and player stats updated from ' + esc(excelState.fileName) + '.');
-    rerenderBody();
-  }
-
-  function previewTable(title, head, rows) {
-    return '<div class="mng-xl-prev"><div class="mng-xl-cap">' + title + '</div>' +
-      '<table class="data"><thead><tr>' + head.map(function (h) { return '<th>' + h + '</th>'; }).join('') + '</tr></thead>' +
-      '<tbody>' + rows + '</tbody></table></div>';
-  }
-  function excelHTML() {
-    var p = excelState.parsed;
-    var inner;
-    if (excelState.loading) {
-      inner = '<div class="mng-xl-status">Loading the Excel reader…</div>';
-    } else if (p) {
-      var sc = previewTable('Top scorers · ' + p.scorers.length, ['Player', 'Goals'],
-        p.scorers.map(function (x) { return '<tr><td class="nm">' + esc(x.n) + '</td><td class="num">' + x.g + '</td></tr>'; }).join(''));
-      var fy = previewTable('Fantasy · ' + p.fantasy.length, ['Player', 'Points'],
-        p.fantasy.map(function (x) { return '<tr><td class="nm">' + esc(x.n) + '</td><td class="num">' + x.p + '</td></tr>'; }).join(''));
-      var stRows = p.statsTable.map(function (x) {
-        return '<tr><td class="nm">' + esc(x.n) + '</td><td>' + esc(x.pos || '—') + '</td><td class="num">' + x.apps + '</td><td class="num">' + x.g + '</td><td class="num">' + x.a + '</td><td class="num">' + x.cs + '</td><td class="num">' + x.pts + '</td></tr>';
-      }).join('');
-      var st = previewTable('Player stats · ' + p.statsTable.length, ['Player', 'Pos', 'Apps', 'G', 'A', 'CS', 'Pts'], stRows);
-      inner =
-        '<div class="mng-xl-ok">✓ Read <b>' + esc(excelState.fileName) + '</b> — ' +
-          p.counts.lb + ' fantasy rows, ' + p.counts.stats + ' player rows. Preview below.</div>' +
-        '<div class="mng-xl-grid">' + sc + fy + '</div>' + st +
-        '<div class="mng-xl-actions">' +
-          '<button class="btn btn-glass btn-sm" id="xlCancel">Cancel</button>' +
-          '<button class="btn btn-primary btn-sm" id="xlConfirm">✓ Confirm &amp; save these 3 updates</button>' +
-        '</div>';
-    } else {
-      inner = '<button class="btn btn-primary btn-sm" id="xlPick">⬆ Choose workbook (.xlsx)</button>' +
-        (excelState.fileName ? '<span class="mng-xl-file">Last: ' + esc(excelState.fileName) + '</span>' : '');
-    }
-    return '<div class="mng-card">' +
-      '<div class="mng-h">Update from the fantasy workbook <em>scorers · fantasy · player stats</em></div>' +
-      '<p class="mng-p">Upload the current <code>PS IA-ITB Fantasy League 2026.xlsx</code>. It reads the ' +
-      '<b>Fantasy Points</b>, <b>Player Stats</b> and <b>Player Database</b> sheets, then shows a preview. ' +
-      'Confirm to update <b>Top scorers</b>, <b>Fantasy</b> and <b>Player stats</b> together — then it saves. ' +
-      'Nothing else on the site is touched.</p>' +
-      (excelState.error ? '<div class="mng-xl-err">⚠ ' + esc(excelState.error) + '</div>' : '') +
-      inner +
-      '<input type="file" id="xlFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" />' +
-    '</div>';
-  }
-
-  /* ---- PUBLISH & BACKUP --------------------------------------- */
-  function backupHTML() {
-    return '<div class="mng-card">' +
-      '<div class="mng-h">Publish to everyone</div>' +
-      '<p class="mng-p">Your saved changes show on this device now. To update the <b>live site for all visitors</b>, ' +
-      'download a fresh <code>data.js</code> and send it to whoever maintains the website — they replace ' +
-      '<code>assets/js/data.js</code> with it. That is the only technical step, and it takes seconds.</p>' +
-      '<div class="mng-actions">' +
-        '<button class="btn btn-primary btn-sm" id="dlData">⬇ Download data.js (to publish)</button>' +
-        '<button class="btn btn-glass btn-sm" id="dlJson">⬇ Download backup (.json)</button>' +
-      '</div>' +
-      '<div class="mng-h" style="margin-top:28px">Restore</div>' +
-      '<p class="mng-p">Revert everything on this device back to the version the site shipped with. ' +
-      'This clears your local edits — export a backup first if unsure.</p>' +
-      '<button class="btn btn-glass btn-sm" id="revertAll">↺ Revert to shipped version</button>' +
-    '</div>';
-  }
-
-  function download(name, text, type) {
-    var blob = new Blob([text], { type: type || 'text/plain' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = name;
-    document.body.appendChild(a); a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
-  }
-  function buildDataJs() {
-    var full = clone(window.PSIA_DATA);
-    KEYS.forEach(function (k) { if (draft[k] != null) full[k] = draft[k]; });
-    return '/* PSIA Website - content. Edited in the Manage page on ' +
-      new Date().toISOString().slice(0, 10) + '. Replaces assets/js/data.js to publish. */\n' +
-      'window.PSIA_DATA = ' + JSON.stringify(full, null, 2) + ';\n';
-  }
-
-  /* ===============================================================
-     SAVE / EVENTS
-     =============================================================== */
-  function msg(text, isErr) {
-    var m = document.getElementById('mngMsg');
-    if (!m) return;
-    m.textContent = text; m.className = 'mng-msg' + (isErr ? ' err' : ' ok');
-    clearTimeout(msg._t); msg._t = setTimeout(function () { if (m) { m.textContent = ''; m.className = 'mng-msg'; } }, 3500);
-  }
-  function normalize() {
-    // numbers as numbers; auto-fill result + id on results
-    ['filled', 'slots'].forEach(function (f) { if (draft.next[f] !== '' && draft.next[f] != null) draft.next[f] = +draft.next[f] || 0; });
-    ['wins', 'draws', 'losses', 'goals'].forEach(function (f) { draft.season[f] = +draft.season[f] || 0; });
-    draft.results.forEach(function (r) {
-      r.sp = +r.sp || 0; r.so = +r.so || 0;
-      if (!r.r) r.r = autoResult(r.sp, r.so);
-      if (!r.id) r.id = slug(r.opp, r.date);
-      ['format', 'video', 'photos', 'stats', 'venue'].forEach(function (f) { if (r[f] == null) r[f] = ''; });
-    });
-    draft.scorers.forEach(function (s) { s.g = +s.g || 0; });
-    draft.fantasy.forEach(function (s) { s.p = +s.p || 0; });
-    draft.statsTable.forEach(function (s) { ['apps', 'g', 'a', 'cs', 'pts'].forEach(function (f) { s[f] = +s[f] || 0; }); });
-  }
-  function save() {
-    normalize();
-    var overlay = {}; KEYS.forEach(function (k) { overlay[k] = clone(draft[k]); });
-    STORE.saveContent(overlay).then(function () {
-      applyOverlay(overlay);           // reflect immediately in public views
-      dirty = false;
-      var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'hidden';
-      rerenderBody();
-      msg('Saved. Changes are live on this device — use Publish to share.');
-    }).catch(function () { msg('Could not save.', true); });
-  }
-  function discard() {
-    loadDraft(); rerenderBody();
-    var b = document.getElementById('mngDirty'); if (b) b.style.visibility = 'hidden';
-    msg('Changes discarded.');
-  }
-  function revertAll() {
-    if (!window.confirm('Revert to the shipped version and clear local edits on this device?')) return;
-    STORE.resetContent().then(function () {
-      window.PSIA_DATA = JSON.parse(JSON.stringify(window.PSIA_DATA_ORIGINAL));
-      loadDraft(); rerenderBody();
-      msg('Reverted to the shipped version.');
-    });
-  }
-
-  /* read an edited field back into the draft */
-  function onInput(e) {
-    var t = e.target;
-    if (t && t.id === 'xlFile') { handleExcelFile(t); return; }
-    var k = t.getAttribute && t.getAttribute('data-k');
-    if (!k || !draft[k]) return;
-    var f = t.getAttribute('data-f');
-    var iAttr = t.getAttribute('data-i');
-    if (iAttr == null) { draft[k][f] = t.value; }
-    else { var i = +iAttr; if (draft[k][i]) draft[k][i][f] = t.value; }
-    markDirty();
-  }
-
-  function blankRow(k) {
-    if (k === 'results') return { id: '', date: '', opp: '', sp: 0, so: 0, r: '', venue: '', format: '', video: '', photos: '', stats: '' };
-    if (k === 'scorers') return { n: '', g: 0 };
-    if (k === 'fantasy') return { n: '', p: 0 };
-    if (k === 'statsTable') return { n: '', pos: '', apps: 0, g: 0, a: 0, cs: 0, pts: 0 };
-    return {};
-  }
-
-  function onClick(e) {
-    var t = e.target;
-    var gateBtn = t.closest && t.closest('#mngGateBtn'); if (gateBtn) { tryUnlock(); return; }
-    if (!unlocked()) return;
-    var tb = t.closest && t.closest('[data-tab]');
-    if (tb) { tab = tb.getAttribute('data-tab'); render(); return; }
-    var add = t.closest && t.closest('[data-add]');
-    if (add) { var ak = add.getAttribute('data-add'); if (ak === 'results') draft[ak].unshift(blankRow(ak)); else draft[ak].push(blankRow(ak)); markDirty(); rerenderBody(); return; }
-    var del = t.closest && t.closest('[data-del]');
-    if (del) { var dk = del.getAttribute('data-del'), di = +del.getAttribute('data-i'); draft[dk].splice(di, 1); markDirty(); rerenderBody(); return; }
-    if (t.closest && t.closest('#mngSave')) { save(); return; }
-    if (t.closest && t.closest('#mngDiscard')) { discard(); return; }
-    if (t.closest && t.closest('#xlPick')) { var fi = document.getElementById('xlFile'); if (fi) fi.click(); return; }
-    if (t.closest && t.closest('#xlConfirm')) { confirmExcel(); return; }
-    if (t.closest && t.closest('#xlCancel')) { excelState.parsed = null; excelState.error = null; rerenderBody(); return; }
-    if (t.closest && t.closest('#nxFill')) { fillNextDate(); return; }
-    if (t.closest && t.closest('#seasonAuto')) { seasonAuto(); return; }
-    if (t.closest && t.closest('#revertAll')) { revertAll(); return; }
-    if (t.closest && t.closest('#dlData')) { normalize(); download('data.js', buildDataJs(), 'text/javascript'); msg('data.js downloaded — send it to the site maintainer.'); return; }
-    if (t.closest && t.closest('#dlJson')) { normalize(); var o = {}; KEYS.forEach(function (k) { o[k] = draft[k]; }); download('psia-content-backup.json', JSON.stringify(o, null, 2), 'application/json'); msg('Backup downloaded.'); return; }
-  }
-  function onKey(e) { if (e.key === 'Enter' && document.getElementById('mngGate')) { e.preventDefault(); tryUnlock(); } }
-
-  document.addEventListener('input', onInput);
-  document.addEventListener('change', onInput);
-  document.addEventListener('click', onClick);
-  document.addEventListener('keydown', onKey);
-
-  /* ===============================================================
-     REGISTER THE VIEW (chain PSIA_AFTER_RENDER, add to EXTRA_VIEWS)
-     =============================================================== */
-  window.PSIA_EXTRA_VIEWS = window.PSIA_EXTRA_VIEWS || {};
-  window.PSIA_EXTRA_VIEWS.manage = function () { return '<div id="mngRoot"></div>'; };
-
-  var prevAfter = window.PSIA_AFTER_RENDER;
-  window.PSIA_AFTER_RENDER = function (view) {
-    if (typeof prevAfter === 'function') prevAfter(view);
-    if (view === 'manage') render();
-  };
-})();
+    if (['ST', 'CF', 'AMR', 'AML', 'FW', 'WING'].some(function (t) { return s.ind
